@@ -42,6 +42,12 @@ if [ -n "$prev_tpl" ] && [ "$prev_tpl" != "$GUARD_ROOT/template" ]; then
   printf '%s' "$prev_tpl" > "$GUARD_DIR/prev-templateDir"
   echo "  已记录原 init.templateDir: $prev_tpl（卸载时还原）"
 fi
+# 保存原有的 core.excludesFile，卸载时还原
+prev_excl=$(git config --global --get core.excludesFile 2>/dev/null || true)
+if [ -n "$prev_excl" ] && [ "$prev_excl" != "$GUARD_ROOT/ignore" ]; then
+  printf '%s' "$prev_excl" > "$GUARD_DIR/prev-excludesFile"
+  echo "  已记录原 core.excludesFile: $prev_excl（卸载时还原）"
+fi
 git config --global init.templateDir "$GUARD_ROOT/template"
 [ -f "$GUARD_ROOT/ignore" ] || cp "$SRC/share/ignore" "$GUARD_ROOT/ignore" 2>/dev/null || true
 [ -f "$GUARD_ROOT/ignore" ] && git config --global core.excludesFile "$GUARD_ROOT/ignore"

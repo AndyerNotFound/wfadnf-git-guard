@@ -299,11 +299,11 @@ g_scan_sizes() {
 # 内容层候选：$1 = index | <rev 清单文件>；$2 = 规则文件；$3 = 可选，只保留这些路径
 # 输出 "blob 表达式<TAB>路径"，表达式可直接喂 git cat-file
 g_content_candidates() {
-  local src="$1" pats="$2" only="${3:-}" d raw
+  local src="$1" pats="$2" only="${3:-}" ci="${4:-}" d raw
   g_tmp_init; d="$__g_tmp"; raw="$d/cand.$$"
   : > "$raw"
   if [ "$src" = "index" ]; then
-    git grep --cached -a -l -z -E -f "$pats" 2>/dev/null | tr '\0' '\n' \
+    git grep --cached -a -l -z -E ${ci:+-i} -f "$pats" 2>/dev/null | tr '\0' '\n' \
       | while IFS= read -r p; do [ -n "$p" ] && printf ':%s\t%s\n' "$p" "$p"; done > "$raw"
   else
     [ -s "$src" ] || return 0
@@ -311,7 +311,7 @@ g_content_candidates() {
     split -l 200 "$src" "$d/chunk.$$." 2>/dev/null
     for cf in "$d/chunk.$$."*; do
       [ -s "$cf" ] || continue
-      git grep -a -l -z -E -f "$pats" $(cat "$cf") -- . 2>/dev/null | tr '\0' '\n' \
+      git grep -a -l -z -E ${ci:+-i} -f "$pats" $(cat "$cf") -- . 2>/dev/null | tr '\0' '\n' \
         | while IFS= read -r line; do
             [ -n "$line" ] || continue
             printf '%s\t%s\n' "$line" "${line#*:}"
@@ -350,7 +350,7 @@ g_scan_contents() {
       g_skip_content_path "$rel" && continue
       g_blob_match "$spec" "$po" i || continue
       g_block "$rel" "内容命中密钥赋值特征"
-    done < <(g_content_candidates "$src" "$po" "$only")
+    done < <(g_content_candidates "$src" "$po" "$only" i)
   fi
   rm -f "$ps" "$po"
 }
@@ -512,7 +512,9 @@ g_check_fingerprints() {
 # 单个工作区文件的内容检查（供 git-guard check 使用，不依赖 index）
 # $1=相对路径（用于 allow-paths / 跳过规则）  $2=实际文件路径（缺省同 $1）
 g_check_content_file() {
-  local rel="$1" f="${2:-$1}" d ps po
+  local rel="$1" f="${2:-$1}" d ps po top
+  case "$f" in /*) top="$(git rev-parse --show-toplevel 2>/dev/null)";; esac
+  if [ -n "${top:-}" ] && [ "${f#"$top"/}" != "$f" ]; then rel="${f#"$top"/}"; fi
   g_allowed_path "$rel" && return 0
   g_tmp_init; d="$__g_tmp"; ps="$d/fps.$$"; po="$d/fpo.$$"
   if [ -f "$GUARD_DIR/deny-content.txt" ]; then

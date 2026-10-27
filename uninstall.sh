@@ -19,4 +19,12 @@ if [ -s "$prev_file" ]; then
 else
   git config --global --unset init.templateDir 2>/dev/null || true
 fi
+# 还原安装前记录的原 core.excludesFile；是 guard 自己写的才清空
+prev_excl_file="$GUARD_ROOT/guard/prev-excludesFile"
+cur_excl=$(git config --global --get core.excludesFile 2>/dev/null || true)
+if [ -s "$prev_excl_file" ]; then
+  git config --global core.excludesFile "$(cat "$prev_excl_file")"; rm -f "$prev_excl_file"
+elif [ "$cur_excl" = "$GUARD_ROOT/ignore" ]; then
+  git config --global --unset core.excludesFile 2>/dev/null || true
+fi
 echo "已卸载。规则仍保留在 $GUARD_ROOT（需要时手动删）。"
