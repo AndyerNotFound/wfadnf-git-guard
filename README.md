@@ -1,14 +1,16 @@
 <p align="center">
   <img src="assets/readme/hero.svg" width="100%"
-       alt="wfadnf-git-guard：提交前按路径、体积、内容特征和运行时文件指纹检查，拦下运行时数据与密钥">
+       alt="wfadnf-git-guard：提交前按路径、体积、内容、指纹四层检查，拦截运行时数据与密钥">
 </p>
 
 <p align="center">
-  给个人仓库加一道提交闸：<b>路径、体积、内容特征、运行时文件指纹</b>四层检查。<br>
-  <code>pre-commit</code> 拦一次，<code>pre-push</code> 对即将发布的每个提交再拦一次。
+  用户级 <code>pre-commit</code> / <code>pre-push</code> 防泄漏闸。<br>
+  <b>路径 · 体积 · 内容 · 指纹</b> 四层检查，在 git 写入之前完成拦截。
 </p>
 
-## 先看拦下来的样子
+<p align="center"><a href="README.en.md">English</a></p>
+
+## 拦截输出示例
 
 ```text
 $ git commit -m "sync runtime"
@@ -30,135 +32,73 @@ $ git commit -m "sync runtime"
 =========================================================
 ```
 
-三个文件分别被路径、宽松密钥特征、高置信度密钥特征拦下；它们都没有进入历史。
-
-## 它解决什么问题
-
-运行时数据、密钥和配置常常就在同一个 home 里，与仓库只隔一个目录。一次 `git add -A`、一次 AI 助手的"顺手提交"，就可能把 `data/`、`config.json`、`.env` 或私钥带进历史。
-
-`.gitignore` 只能按路径挡，只在单个仓库里生效，也挡不住 `git add -f`。git-guard 把规则放到用户级，在 git 真正写入前检查文件内容：
-
-- **改名的副本也能认。** 先给运行时文件算指纹，仓库里出现逐字节相同的文件就拦，不管后缀是 `.dat` 还是 `.txt`。
-- **推送前还能补刀。** `git commit --no-verify` 跳过的提交，`pre-push` 会连同 merge 带入、加了又删的内容一起重扫。
-- **纯 bash，无 Node/Python 依赖。** Linux 与 Android/Termux 直接可用；macOS 需 GNU coreutils/findutils/sed（见下文安装）。
-
-## 四层检查
-
-| 层 | 拦什么 | 在哪里生效 |
-|---|---|---|
-| 路径 | `data/`、`logs/`、`storage/`、`.env`、`config.*.json`、`*.pem`、`*.db`、日志、压缩包 | 提交、推送、审计 |
-| 体积 | 超过 5 MB 的文件，通常是数据库、备份或构建产物 | 提交、推送、审计 |
-| 内容 | 私钥头、`sk-`、`ghp_`、`AKIA`、`AIza`、JWT，以及 `key/password/token = "…"` 赋值 | 提交、推送、审计 |
-| 指纹 | 与 `protected-roots.txt` 下运行时文件逐字节相同的副本 | 提交、推送、工作区核验 |
-| 受保护目录 | 位于 `protected-roots.txt` 内的仓库，默认禁止提交和推送 | 提交、推送 |
-
-内容检查只读前 1 MB；`mock`、`dummy`、`example`、`your_api_key` 这类占位值会跳过。宽松规则不检查 `lang/`、`test/`、`docs/`，高置信度规则任何目录都查。
-
-## 被拦时手机直接弹通知
-
-装了 `termux-api`（Android）或 `notify-send`（桌面）就会自动推送，不用回终端敲命令：
-
-- **详情**：打开 `~/.config/git/guard/last-block.txt`，含完整命中列表、仓库路径、修复命令
-- **取消暂存**：一键对本次命中的文件执行 `git restore --staged`
-- **本次允许**：写一枚一次性放行令牌——绑定这个仓库和这次的操作类型（提交/推送），默认 10 分钟内有效，**下一次提交尝试时消费掉，且仅此一次**
-
-"本次允许"不是"永远不管"：令牌只放行下一次提交，推送层不认这枚令牌，即便内容真进了提交，`git push` 时 `pre-push` 会重新拦下。有效期可调：`echo 3600 > ~/.config/git/guard/allow-ttl`（秒）。通知失败绝不影响拦截结果，判定照样返回非零。
+`.gitignore` 仅按路径匹配、仅在单个仓库内生效，且无法阻止 `git add -f`。git-guard 将规则置于用户级并按内容检查：运行时文件预先计算指纹，任何仓库中出现逐字节相同的副本均会被拦截，即使重命名或更改扩展名亦然。
 
 ## 安装
 
-需要 `bash`、`git` 和 GNU `find`/`awk`/`sed`/`grep`（主流 Linux 发行版自带）；macOS 需 `brew install coreutils findutils gnu-sed` 并把 `gnubin` 加进 PATH。
+依赖 `bash`、`git` 及 GNU `find`/`awk`/`sed`/`grep`；macOS 需执行 `brew install coreutils findutils gnu-sed`，并将 `gnubin` 加入 PATH。
 
 ```bash
 git clone https://github.com/AndyerNotFound/wfadnf-git-guard.git
 cd wfadnf-git-guard && ./install.sh
 ```
 
-`install.sh` 幂等，已存在的规则文件不会被覆盖。它把钩子模板装进 `~/.config/git/template`，所以**之后新 clone 的仓库会自动继承钩子**；`git-guard install` 用来补装已有仓库。
+钩子模板写入 `~/.config/git/template`，此后克隆的仓库自动继承；已有仓库可通过 `git-guard install` 补装。卸载方式：`./uninstall.sh`。
 
-装完后补两条自己的规则，再初始化：
-
-```bash
-# 只给自己的远端装钩子；第三方开源仓库不动
-echo 'github.com/yourname/' >> ~/.config/git/guard/owners.txt
-
-# 运行时数据放在哪里
-echo "$HOME/app-runtime" >> ~/.config/git/guard/protected-roots.txt
-
-git-guard install ~/work      # 给已有仓库装钩子 + 索引级忽略
-git-guard snapshot            # 生成运行时文件指纹
-wsnap init && wsnap hook on   # 工作区基线 + 提示符核验
-```
-
-卸载：`./uninstall.sh`。
-
-## 日常使用
+补充以下两项个人配置后完成初始化：
 
 ```bash
-git-guard status              # 全局配置、受保护目录、已挂钩子的仓库
-git-guard audit ~/work        # 审计已入库内容（只列文件名，不打印内容）
-git-guard snapshot            # 运行时配置变了之后重算指纹
-git-guard check data/x.json   # 干跑：看某个文件会不会被拦（调规则用）
-
-wsnap verify                  # 工作区比基线多了/改了什么
-wsnap verify --accept         # 确认无误，接受为新基线
-wsnap watch 5                 # 常驻轮询，只在告警时打印
-wsnap hook off                # 卸载提示符钩子
+echo 'github.com/yourname/' >> ~/.config/git/guard/owners.txt         # 自有远端
+echo "$HOME/app-runtime"   >> ~/.config/git/guard/protected-roots.txt # 运行时目录
+git-guard snapshot && wsnap init && wsnap hook on
 ```
 
-`wsnap` 默认核验 `~/work`，用 `WSN_ROOT` 指定别的目录；返回码 `3` 表示有告警。
+## 用法
 
-**通知开关：**
+| 命令 | 功能 |
+|---|---|
+| `git-guard status` | 显示配置、受保护目录与已挂钩仓库 |
+| `git-guard audit <目录>` | 审计已入库内容（仅列出文件名） |
+| `git-guard snapshot` | 重新计算运行时指纹 |
+| `git-guard check <文件>` | 预检：判断该文件是否会被拦截 |
+| `wsnap verify` | 报告工作区相对基线的变更（存在告警时返回码为 3） |
+| `wsnap verify --accept` | 接受当前状态为新基线 |
+| `wsnap watch 5` | 常驻轮询 |
+| `wsnap hook off` | 卸载提示符钩子 |
 
-```bash
-GUARD_NOTIFY=0 git commit -m "..."   # 单次不通知
-touch ~/.config/git/guard/notify.off # 长期关闭（rm 恢复）
-```
-
-**误报怎么放行：**
-
-```bash
-# 永久放行：写 ERE，以 ^/ 开头，匹配 /仓库内相对路径
-echo '^/fixtures/sample-config\.json$' >> ~/.config/git/guard/allow-paths.txt
-
-# 单次放行
-GUARD_OVERRIDE=1 git commit -m "..."
-```
-
-源码里的 `data`、`runtime` 包名已经在 `allow-paths.txt` 里放行；受保护目录内确实需要提交的仓库，可以写进可选的 `allowed-repos.txt`。
+若已安装 `termux-api` 或 `notify-send`，拦截发生时将推送通知，可一键取消暂存，或签发一次性放行令牌（默认有效期 10 分钟，仅对下一次提交有效，`pre-push` 不予认可；有效期可经 `allow-ttl` 调整）。`GUARD_NOTIFY=0` 使本次操作不发送通知，`GUARD_OVERRIDE=1` 放行本次操作，误报可写入 `allow-paths.txt` 获得永久放行。
 
 ## 规则
 
-全部是纯文本，一行一条 ERE，`#` 开头为注释，改完立即生效：
+`~/.config/git/guard/` 下均为纯文本文件，每行一条 ERE，修改后立即生效。
 
-| 文件（`~/.config/git/guard/`） | 用途 |
+| 文件 | 用途 |
 |---|---|
-| `deny-paths.txt` | 路径规则，匹配 `/仓库内相对路径` |
-| `deny-content.txt` | 高置信度特征，大小写敏感，含二进制文件 |
-| `deny-content-soft.txt` | 宽松的密钥赋值特征，`lang`/`test`/`docs` 跳过 |
-| `allow-paths.txt` | 永久放行，也用于源码里的 `data` 包名 |
-| `protected-roots.txt` | 这些目录内的仓库禁止提交/推送 |
-| `owners.txt` | 自有远端前缀，决定 `git-guard install` 给谁装钩子 |
-| `exclude-dirs.txt` | 扫描仓库时跳过的目录名 |
-| `private.blobs` | 运行时文件指纹清单，由 `git-guard snapshot` 生成 |
-| `allowed-repos.txt` | 可选；受保护目录内仍允许提交的仓库绝对路径 |
+| `deny-paths.txt` | 路径规则：`data/`、`.env`、`*.pem`、日志、压缩包等 |
+| `deny-content.txt` | 高置信度特征：私钥头、`sk-`、`ghp_`、`AKIA`、JWT |
+| `deny-content-soft.txt` | 密钥赋值 `key = "…"`；跳过 `lang`/`test`/`docs` |
+| `allow-paths.txt` | 永久放行 |
+| `protected-roots.txt` | 禁止目录内仓库提交与推送 |
+| `owners.txt` | 自有远端前缀 |
+| `exclude-dirs.txt` | 扫描时跳过的目录 |
+| `private.blobs` | 指纹清单（由 `snapshot` 生成） |
+| `allowed-repos.txt` | 受保护目录内的例外仓库 |
 
-## 边界
+体积上限为 5 MB；内容检查仅读取前 1 MB，并跳过 `mock`/`example` 等占位值；指纹仅匹配逐字节相同的文件。
 
-- **不是沙箱。** 钩子、规则、指纹都在 `~/.config/git/`，同一用户可删改；`git push --no-verify` 也能直接跳过客户端钩子。真正的兜底在服务端：GitHub push protection，或裸库的 `pre-receive`。
-- **只认逐字节相同。** 编码、压缩、加密后的变体认不出。
-- **新 clone 会继承模板钩子。** 包括第三方仓库；`owners.txt` 只影响 `git-guard install` 的扫描范围，介意的话单独调整 `init.templateDir`。
-- **没有 inotify。** 工作区里"刚创建"的文件，要等下一次 `wsnap verify` 才按 mtime + 哈希补上。
-- **通知依赖外部命令。** `termux-notification`（Termux:API）或 `notify-send`，都没有就静默跳过通知，检查本身不受影响。
-- **临时目录。** 所有中间文件都在 `TMPDIR` 下的临时目录里，跑完即删；`TMPDIR` 缺失时按 `/tmp` → `~/.cache` → `$PREFIX/tmp` 依次探测可写目录，全不可写则**拒绝放行并报错**（不静默跳过检查）。
-- **审计只看文件名。** `git-guard audit` 不会打印命中内容，避免二次泄漏；清理历史仍需 `git filter-repo` 或 BFG。
+## 限制
+
+- 并非沙箱：钩子可被同一用户删除或修改，`--no-verify` 亦可跳过；最终防线依赖服务端 push protection 或 `pre-receive`。
+- 指纹无法识别经编码、压缩或加密处理后的变体。
+- 新克隆的仓库（含第三方仓库）将继承模板钩子；如不希望继承，可调整 `init.templateDir`。
+- 未使用 inotify；新建文件将于下一次 `wsnap verify` 时纳入基线。
+- `audit` 仅列出文件名；清理历史记录需使用 `git filter-repo` 或 BFG。
 
 ## 自测
 
 ```bash
-bash test/run-tests.sh    # 32 个用例，全部在临时目录
+bash test/run-tests.sh   # 32 个用例，全部在临时目录中执行
 ```
-
-覆盖普通代码放行、`data/` 拦截、改名副本、手写密钥、6 MB 文件、`--no-verify` 后推送、merge 带入、受保护目录、二进制内嵌密钥、`GUARD_OVERRIDE`、`allow-paths` 放行、`TMPDIR` 缺失、临时目录不残留，`wsnap` 的基线/告警/接受，通知层，以及"本次允许"令牌的放行一次/用后即焚/过期拒绝。
 
 ## License
 
