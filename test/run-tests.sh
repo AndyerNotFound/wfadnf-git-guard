@@ -4,6 +4,8 @@ set -uo pipefail
 SRC=$(cd "$(dirname "$0")/.." && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export GUARD_ROOT="$T/root" GUARD_DIR="$T/root/guard"
+# 自测不往手机上推真实通知
+export GUARD_NOTIFY=0
 mkdir -p "$GUARD_ROOT/template/hooks" "$GUARD_ROOT/template/info" "$GUARD_DIR"
 cp "$SRC/lib/guard-lib.sh" "$GUARD_ROOT/"
 cp "$SRC"/share/template/hooks/* "$GUARD_ROOT/template/hooks/"
@@ -116,6 +118,46 @@ mkdir -p "$WS/data"; echo '{}' > "$WS/data/x.json"
 run_wsnap verify >/dev/null 2>&1; [ $? -eq 3 ] && ok "wsnap 可疑路径返回 3" || no "wsnap 可疑路径返回 3"
 run_wsnap verify --accept >/dev/null 2>&1
 run_wsnap verify >/dev/null 2>&1; [ $? -eq 0 ] && ok "wsnap --accept 生效" || no "wsnap --accept 生效"
+
+echo "== 通知层 =="
+new_repo n1
+mkdir -p data; echo '{}' > data/c.json
+git add -f data >/dev/null 2>&1
+GUARD_NOTIFY=1 git commit -qm x >/dev/null 2>&1
+[ -s "$GUARD_DIR/last-block.txt" ] && ok "拦截时写报告文件" || no "拦截时写报告文件"
+grep -q "^REPO=" "$GUARD_DIR/last-block.txt" 2>/dev/null \
+  && grep -q "data/c.json" "$GUARD_DIR/last-block.txt" 2>/dev/null \
+  && ok "报告含仓库与命中文件" || no "报告含仓库与命中文件"
+# 通知关闭时不应写报告（GUARD_NOTIFY=0 走的是"未启用"分支，报告仍在 g_notify 内）
+rm -f "$GUARD_DIR/last-block.txt"
+GUARD_NOTIFY=0 git commit -qm y >/dev/null 2>&1
+[ ! -s "$GUARD_DIR/last-block.txt" ] && ok "GUARD_NOTIFY=0 不写报告" || no "GUARD_NOTIFY=0 不写报告"
+touch "$GUARD_DIR/notify.off"
+GUARD_NOTIFY=1 git commit -qm z >/dev/null 2>&1
+[ ! -s "$GUARD_DIR/last-block.txt" ] && ok "notify.off 关闭通知" || no "notify.off 关闭通知"
+rm -f "$GUARD_DIR/notify.off"; reset_repo n1
+
+echo "== 通知按钮：本次允许 =="
+new_repo a1
+mkdir -p data; echo '{}' > data/c.json
+git add -f data >/dev/null 2>&1
+git commit -qm x >/dev/null 2>&1
+[ $? -ne 0 ] && ok "放行前被拦" || no "放行前被拦"
+printf 'REPO=%s\nKIND=提交\nEXPIRE=%s\n' "$PWD" "$(( $(date +%s) + 600 ))" > "$GUARD_DIR/override-one-shot"
+git commit -qm x >/dev/null 2>&1
+[ $? -eq 0 ] && ok "令牌放行一次" || no "令牌放行一次"
+[ ! -e "$GUARD_DIR/override-one-shot" ] && ok "令牌用后即焚" || no "令牌用后即焚"
+mkdir -p data; echo y > data/y.json; git add -f data >/dev/null 2>&1
+git commit -qm x >/dev/null 2>&1
+[ $? -ne 0 ] && ok "令牌用完再拦" || no "令牌用完再拦"
+reset_repo a1
+new_repo a2
+mkdir -p data; echo '{}' > data/c.json; git add -f data >/dev/null 2>&1
+printf 'REPO=%s\nKIND=提交\nEXPIRE=%s\n' "$PWD" "$(( $(date +%s) - 10 ))" > "$GUARD_DIR/override-one-shot"
+git commit -qm x >/dev/null 2>&1
+[ $? -ne 0 ] && ok "过期令牌不放行" || no "过期令牌不放行"
+[ ! -e "$GUARD_DIR/override-one-shot" ] && ok "过期令牌也被消费" || no "过期令牌也被消费"
+reset_repo a2
 
 echo
 echo "通过 $pass / 失败 $fail"

@@ -52,6 +52,102 @@ g_block() {
 
 g_pats() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null; }
 
+# ============ 通知层 ============
+# 被拦时推送到系统通知栏，省掉"回 Termux 敲命令"这一步。
+# 通知本身失败绝不影响拦截结果（全部 || :，并带 timeout）。
+G_NOTIFY_TITLE_PREFIX="${GUARD_NOTIFY_TITLE_PREFIX:-git-guard}"
+
+# 是否启用：GUARD_NOTIFY=0 关；$GUARD_DIR/notify.off 关；没有可用通知命令则静默跳过
+g_notify_enabled() {
+  [ "${GUARD_NOTIFY:-1}" = "0" ] && return 1
+  [ -f "$GUARD_DIR/notify.off" ] && return 1
+  command -v termux-notification >/dev/null 2>&1 && return 0
+  command -v notify-send >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# 写拦截报告：通知里点"详情"打开的就是它
+# 一次性放行令牌：通知"本次允许"按钮写入；绑定仓库+操作类型，带过期时间，
+# 下一次同仓库同操作时消费掉（等价于 GUARD_OVERRIDE=1，但只能用一次）
+g_one_shot_file() { printf '%s/override-one-shot' "$GUARD_DIR"; }
+
+# $1=仓库根  $2=操作类型（提交/推送）；命中则消费令牌并返回 0
+g_consume_one_shot() {
+  local top="$1" kind="$2" f rf rk rt
+  f=$(g_one_shot_file)
+  [ -s "$f" ] || return 1
+  rf=$(sed -n 's/^REPO=//p' "$f" | head -1)
+  rk=$(sed -n 's/^KIND=//p' "$f" | head -1)
+  rt=$(sed -n 's/^EXPIRE=//p' "$f" | head -1)
+  if [ "$rf" != "$top" ] || [ "$rk" != "$kind" ]; then
+    return 1
+  fi
+  rm -f "$f"
+  if [ -n "$rt" ] && [ "$(date +%s)" -gt "$rt" ] 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+g_write_report() {
+  local kind="$1" f="$GUARD_DIR/last-block.txt" i top
+  mkdir -p "$GUARD_DIR" 2>/dev/null || return 0
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top="$PWD"
+  {
+    printf 'REPO=%s\n' "$top"
+    printf 'KIND=%s\n' "$kind"
+    printf 'TIME=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf 'FILES:\n'
+    for i in "${!__g_files[@]}"; do
+      printf '%s\t%s\n' "${__g_files[$i]}" "${__g_reasons[$i]}"
+    done
+    printf 'HINT:\n'
+    printf '%s\n' "git restore --staged <file>      取消暂存"
+    printf '%s\n' "git rm --cached <file>           已入库的移出索引"
+    printf '%s\n' "echo '<pattern>' >> .gitignore   长期忽略"
+    printf '%s\n' ""
+    printf '规则: %s/{deny-paths,deny-content,deny-content-soft}.txt\n' "$GUARD_DIR"
+    printf '误伤放行: echo '\''^/路径$'\'' >> %s/allow-paths.txt\n' "$GUARD_DIR"
+    printf '单次放行: GUARD_OVERRIDE=1 git ...\n'
+  } > "$f" 2>/dev/null
+  printf '%s' "$f"
+}
+
+g_notify() {
+  local kind="$1" n i body f act title
+  g_notify_enabled || return 0
+  n=${#__g_files[@]}
+  [ "$n" -eq 0 ] && return 0
+  f=$(g_write_report "$kind")
+  title="$G_NOTIFY_TITLE_PREFIX 拦截${kind} · ${n} 个文件"
+  body=""
+  i=0
+  while [ "$i" -lt "$n" ] && [ "$i" -lt 5 ]; do
+    body="$body${__g_files[$i]} — ${__g_reasons[$i]}"$'\n'
+    i=$((i + 1))
+  done
+  [ "$n" -gt 5 ] && body="$body… 另有 $((n - 5)) 个文件"$'\n'
+  body="$body（点"详情"看完整报告）"
+  act="$GUARD_DIR/notify-action.sh"
+
+  if command -v termux-notification >/dev/null 2>&1; then
+    if [ -x "$act" ]; then
+      timeout 8 termux-notification --title "$title" --content "$body" \
+        --priority high --id git-guard --sound \
+        --button1 "取消暂存" --button1-action "$act undo" \
+        --button2 "本次允许" --button2-action "$act allow" \
+        --button3 "详情" --button3-action "$act view" \
+        >/dev/null 2>&1 || :
+    else
+      timeout 8 termux-notification --title "$title" --content "$body" \
+        --priority high --id git-guard --sound >/dev/null 2>&1 || :
+    fi
+  elif command -v notify-send >/dev/null 2>&1; then
+    timeout 8 notify-send -u critical "$title" "$body" >/dev/null 2>&1 || :
+  fi
+  return 0
+}
+
 g_report() {
   [ "$__g_blocked" -eq 0 ] && return 0
   {
@@ -70,6 +166,7 @@ g_report() {
     printf '%s\n' "========================================================="
   } >&2
   [ "${GUARD_OVERRIDE:-0}" = "1" ] && { printf '%s\n' "git-guard: GUARD_OVERRIDE=1，本次放行" >&2; return 0; }
+  g_notify "$1"
   return 1
 }
 
@@ -297,6 +394,10 @@ guard_pre_commit() {
   local top
   top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
   g_tmp_init; trap 'g_tmpclean' EXIT
+  if g_consume_one_shot "$top" "提交"; then
+    printf '%s\n' "git-guard: 通知放行，跳过本次提交检查" >&2
+    exit 0
+  fi
   g_check_repo_root "$top" || { g_report "提交"; exit 1; }
   g_scan_index
   g_check_fingerprints index
@@ -307,6 +408,10 @@ guard_pre_push() {
   local top lref lsha rref rsha tips=() sha
   top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
   g_tmp_init; trap 'g_tmpclean' EXIT
+  if g_consume_one_shot "$top" "推送"; then
+    printf '%s\n' "git-guard: 通知放行，跳过本次推送检查" >&2
+    exit 0
+  fi
   g_check_repo_root "$top" || { g_report "推送"; exit 1; }
   while read -r lref lsha rref rsha; do
     [ -z "$lsha" ] && continue

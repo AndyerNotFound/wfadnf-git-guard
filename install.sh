@@ -16,6 +16,21 @@ cp "$SRC/share/template/info/exclude" "$GUARD_ROOT/template/info/exclude"
 install -m 755 "$SRC/bin/git-guard" "$BIN_DIR/git-guard"
 install -m 755 "$SRC/bin/wsnap"     "$BIN_DIR/wsnap"
 
+# 通知按钮的 action 脚本：把安装时的绝对路径烘进去（termux 的 action 环境没有 PATH/HOME）
+act_src="$SRC/share/guard/notify-action.sh"
+if [ -f "$act_src" ]; then
+  # Termux 没有 /usr/bin/env，shebang 必须写成绝对 bash 路径
+  bashbin="${PREFIX:-/usr}/bin/bash"
+  [ -x "$bashbin" ] || bashbin="/bin/bash"
+  sed -e "1s|^#!.*|#!$bashbin|" \
+      -e "s|__HOME__|$HOME|g" \
+      -e "s|__PREFIX__|${PREFIX:-/usr}|g" \
+      -e "s|__GUARD_ROOT__|$GUARD_ROOT|g" \
+      "$act_src" > "$GUARD_DIR/notify-action.sh"
+  chmod 755 "$GUARD_DIR/notify-action.sh"
+  echo "  通知动作: ${GUARD_DIR/#$HOME/~}/notify-action.sh"
+fi
+
 for f in "$SRC"/share/guard/*.txt; do
   dst="$GUARD_DIR/$(basename "$f")"
   [ -f "$dst" ] || { cp "$f" "$dst"; echo "  规则: ${dst/#$HOME/~}"; }
