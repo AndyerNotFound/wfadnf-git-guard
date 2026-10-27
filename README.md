@@ -40,7 +40,7 @@ $ git commit -m "sync runtime"
 
 - **改名的副本也能认**：先给运行时文件算指纹，仓库里出现逐字节相同的文件就拦，不管后缀是 `.dat` 还是 `.txt`。
 - **推送前还能补刀**：`git commit --no-verify` 跳过的提交，`pre-push` 会连同 merge 带入、加了又删的内容一起重扫。
-- **纯 bash，无 Node/Python 依赖**：Linux、macOS、Android 上的 POSIX shell 都能直接跑。
+- **纯 bash，无 Node/Python 依赖**：Linux 与 Android/Termux 直接可用；macOS 需装 GNU coreutils/findutils（用到 `find -printf`、`stat -c`、`sed -i`），或用 `brew install coreutils findutils gnu-sed` 后加 `gnubin` 到 PATH。
 
 ## 四层检查
 
@@ -87,6 +87,7 @@ wsnap init && wsnap hook on   # 工作区基线 + 提示符核验
 git-guard status              # 全局配置、受保护目录、已挂钩子的仓库
 git-guard audit ~/work        # 审计已入库内容（只列文件名，不打印内容）
 git-guard snapshot            # 运行时配置变了之后重算指纹
+git-guard check data/x.json   # 干跑：看某个文件会不会被拦（调规则用）
 
 wsnap verify                  # 工作区比基线多了/改了什么
 wsnap verify --accept         # 确认无误，接受为新基线
@@ -130,15 +131,16 @@ GUARD_OVERRIDE=1 git commit -m "..."
 - **只认逐字节相同。** 编码、压缩、加密后的变体认不出。
 - **新 clone 会继承模板钩子。** 包括第三方仓库；`owners.txt` 只影响 `git-guard install` 的扫描范围，不会阻止新 clone 继承钩子，介意的话单独调整 `init.templateDir`。
 - **没有 inotify。** 工作区里“刚创建”的文件，要等下一次 `wsnap verify` 才按 mtime + 哈希补上。
+- **临时目录。** 所有中间文件都在 `TMPDIR` 下的临时目录里，跑完即删；`TMPDIR` 缺失时按 `/tmp` → `~/.cache` → `$PREFIX/tmp` 依次探测可写目录，全不可写则**拒绝放行并报错**（不静默跳过检查）。
 - **审计只看文件名。** `git-guard audit` 不会打印命中内容，避免二次泄漏；清理历史仍需 `git filter-repo` 或 BFG。
 
 ## 自测
 
 ```bash
-bash test/run-tests.sh    # 12 个用例，全部在临时目录
+bash test/run-tests.sh    # 22 个用例，全部在临时目录
 ```
 
-覆盖普通代码放行、`data/` 拦截、改名副本、手写密钥、`key` 字段、源码 `data` 包名放行、6 MB 文件、`--no-verify` 后推送、merge 带入、受保护目录。
+覆盖普通代码放行、`data/` 拦截、改名副本、手写密钥、`key` 字段、源码 `data` 包名放行、6 MB 文件、`--no-verify` 后推送、merge 带入、受保护目录、二进制内嵌密钥、`GUARD_OVERRIDE`、`allow-paths` 放行、`TMPDIR` 缺失、临时目录不残留，以及 `wsnap` 的基线/新增/告警/接受。
 
 ## License
 

@@ -73,6 +73,50 @@ cp "$GUARD_ROOT/template/hooks/"* .git/hooks/
 echo x > a.txt; git add a.txt; git commit -qm x >/dev/null 2>&1
 [ $? -ne 0 ] && ok "受保护目录内禁止提交" || no "受保护目录内禁止提交"
 
+echo "== 二进制与放行 =="
+new_repo b1
+printf '\000\001sk-%s\000\377\n' "abcdefghijklmnopqrstuvwx" > blob.bin
+blocked && ok "二进制内嵌密钥拦截" || no "二进制内嵌密钥拦截"; reset_repo b1
+new_repo b2
+printf 'const k="sk-%s";\n' "abcdefghijklmnopqrstuvwx" > k.js
+GUARD_OVERRIDE=1 git add -A >/dev/null 2>&1
+GUARD_OVERRIDE=1 git commit -qm x >/dev/null 2>&1
+[ $? -eq 0 ] && ok "GUARD_OVERRIDE 单次放行" || no "GUARD_OVERRIDE 单次放行"; reset_repo b2
+new_repo b3
+mkdir -p fixtures; printf 'const k="sk-%s";\n' "abcdefghijklmnopqrstuvwx" > fixtures/k.js
+echo '^/fixtures/' >> "$GUARD_DIR/allow-paths.txt"
+passed && ok "allow-paths 放行" || no "allow-paths 放行"
+sed -i '$d' "$GUARD_DIR/allow-paths.txt"; reset_repo b3
+
+echo "== 临时目录兜底 =="
+new_repo t1
+mkdir -p data; echo '{}' > data/c.json
+git add -f data >/dev/null 2>&1
+env -u TMPDIR bash -c '. "$GUARD_ROOT/guard-lib.sh"; guard_pre_commit' >/dev/null 2>&1
+[ $? -ne 0 ] && ok "无 TMPDIR 仍能拦截" || no "无 TMPDIR 仍能拦截"; reset_repo t1
+rm -rf "$TMPDIR"/gg.* 2>/dev/null
+bash -c '. "$GUARD_ROOT/guard-lib.sh"; g_tmp_init; g_tmpclean' >/dev/null 2>&1
+[ "$(ls -d "$TMPDIR"/gg.* 2>/dev/null | wc -l)" -eq 0 ] && ok "临时目录不残留" || no "临时目录不残留"
+
+echo "== 推送层二进制 =="
+new_repo p2; git init -q --bare "$T/bare3.git"; git remote add origin "$T/bare3.git"
+printf '\000sk-%s\000\n' "abcdefghijklmnopqrstuvwx" > blob.bin
+git add -A >/dev/null 2>&1; git commit -qm leak --no-verify >/dev/null 2>&1
+git push -q origin HEAD:master >/dev/null 2>&1
+[ $? -ne 0 ] && ok "推送层拦二进制密钥" || no "推送层拦二进制密钥"
+
+echo "== wsnap =="
+WS="$T/ws"; mkdir -p "$WS/sub"; echo a > "$WS/a.txt"; echo b > "$WS/sub/b.txt"
+run_wsnap(){ WSN_ROOT="$WS" WSN_STATE="$GUARD_DIR/wsnap" "$SRC/bin/wsnap" "$@" 2>&1; }
+run_wsnap init >/dev/null
+run_wsnap verify | grep -q "0 新增 / 0 修改 / 0 删除" && ok "wsnap 基线无变化" || no "wsnap 基线无变化"
+echo c > "$WS/c.txt"
+run_wsnap verify | grep -q "1 新增" && ok "wsnap 检出新增" || no "wsnap 检出新增"
+mkdir -p "$WS/data"; echo '{}' > "$WS/data/x.json"
+run_wsnap verify >/dev/null 2>&1; [ $? -eq 3 ] && ok "wsnap 可疑路径返回 3" || no "wsnap 可疑路径返回 3"
+run_wsnap verify --accept >/dev/null 2>&1
+run_wsnap verify >/dev/null 2>&1; [ $? -eq 0 ] && ok "wsnap --accept 生效" || no "wsnap --accept 生效"
+
 echo
 echo "通过 $pass / 失败 $fail"
 [ "$fail" -eq 0 ]

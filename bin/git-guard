@@ -4,6 +4,7 @@
 #   git-guard status              查看全局配置、规则、已挂钩子的仓库
 #   git-guard audit  [目录...]    审计已入库内容（只列文件名，不打印内容）
 #   git-guard snapshot            重算运行时文件指纹清单
+#   git-guard check <文件...>     干跑：看这些文件会不会被拦（调规则用）
 set -u
 GUARD_ROOT="${GUARD_ROOT:-$HOME/.config/git}"
 GUARD_DIR="${GUARD_DIR:-$GUARD_ROOT/guard}"
@@ -22,7 +23,7 @@ find_repos() {
   for r in "${roots[@]}"; do
     [ -d "$r" ] || continue
     find "$r" -maxdepth 5 -name .git -prune -print 2>/dev/null
-  done | sed 's|/\.git$||' | grep -vE "/($(exclude_re))(/)?" | sort -u
+  done | sed 's|/\.git$||' | grep -vE "/($(exclude_re))($|/)" | sort -u
 }
 
 # 只给"自己的"仓库挂钩子：无远端 / 远端在 owners.txt 里 / 自建远端
@@ -106,10 +107,48 @@ cmd_audit() {
 
 cmd_snapshot() { g_fp_snapshot; }
 
+# 干跑：看某个路径会不会被拦（不改动仓库，方便调规则）
+cmd_check() {
+  [ "$#" -gt 0 ] || { echo "用法: git-guard check <文件...>" >&2; exit 2; }
+  local top f rel
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=""
+  trap 'g_tmpclean' EXIT
+  __g_blocked=0; __g_files=(); __g_reasons=()
+  for f in "$@"; do
+    [ -e "$f" ] || { echo "  ? $f  (不存在)" >&2; continue; }
+    # 归一化为"仓库内相对路径"：绝对路径去掉仓库根前缀，其余原样
+    if [ -n "$top" ] && [ "${f#"$top"/}" != "$f" ]; then
+      rel="${f#"$top"/}"
+    elif [ "${f#/}" != "$f" ]; then
+      rel="${f#/}"
+    else
+      rel="$f"
+    fi
+    g_check_path "$rel"
+    if [ -d "$f" ]; then
+      echo "  ! $rel  (目录，只做路径检查)"
+      continue
+    fi
+    g_check_size "$rel" "$(stat -c %s "$f" 2>/dev/null || echo 0)"
+    g_check_content_file "$rel" "$f"
+    g_check_fingerprint_file "$rel" "$f"
+  done
+  if [ "$__g_blocked" -eq 0 ]; then
+    echo "放行：$*"
+    return 0
+  fi
+  local i
+  for i in "${!__g_files[@]}"; do
+    printf '  x %s\n      -> %s\n' "${__g_files[$i]}" "${__g_reasons[$i]}"
+  done
+  return 1
+}
+
 case "${1:-status}" in
+  check)    shift; cmd_check "$@";;
   snapshot) cmd_snapshot;;
   install)  shift; cmd_install "$@";;
   status)   cmd_status;;
   audit)    shift; cmd_audit "$@";;
-  *) echo "用法: git-guard {install|status|audit|snapshot} [目录...]"; exit 2;;
+  *) echo "用法: git-guard {install|status|audit|snapshot|check} [参数...]"; exit 2;;
 esac

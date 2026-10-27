@@ -9,7 +9,40 @@ G_MOCK_RE='(mock|dummy|fake|sample|placeholder|example|redacted|your[_-]?(api|ke
 # 只有"宽松"规则跳过的目录；高置信度规则任何目录都查
 G_SKIP_RE='/(lang|locales|i18n|tests?|__tests__|fixtures|__mocks__|docs?|examples?)/'
 
+# TMPDIR 兜底：cron/CI 里常未设置，缺失会让临时文件写入失败、检查静默失效。
+# 依次探测可写目录（Android/Termux 上 /tmp 往往不可写，所以不能只回退 /tmp）。
+g_pick_tmpdir() {
+  local c
+  for c in "${TMPDIR:-}" /tmp "$HOME/.cache" "$HOME/.tmp" "${PREFIX:-}/tmp"; do
+    [ -n "$c" ] || continue
+    [ -d "$c" ] && [ -w "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  c="$HOME/.cache/git-guard-tmp"
+  mkdir -p "$c" 2>/dev/null && [ -w "$c" ] && { printf '%s' "$c"; return 0; }
+  return 1
+}
+if ! TMPDIR=$(g_pick_tmpdir); then
+  printf '%s\n' "git-guard: 找不到可写的临时目录，无法执行检查（不会静默放行）" >&2
+  printf '%s\n' "  设置 TMPDIR 到可写目录后重试，或确认无害后: GUARD_OVERRIDE=1 git ..." >&2
+  [ "${GUARD_OVERRIDE:-0}" = "1" ] && TMPDIR="$HOME" || exit 1
+fi
+export TMPDIR
+
 __g_blocked=0; __g_files=(); __g_reasons=()
+__g_tmp=""
+
+# 本次进程专用临时目录：显式初始化（不能用命令替换，否则赋值只发生在子 shell 里，
+# 每次调用都会新建目录并泄漏）。结果放在全局 $__g_tmp。
+g_tmp_init() {
+  [ -n "$__g_tmp" ] && return 0
+  __g_tmp=$(mktemp -d "$TMPDIR/gg.XXXXXX" 2>/dev/null) || __g_tmp="$TMPDIR"
+  return 0
+}
+
+g_tmpclean() {
+  case "$__g_tmp" in ''|"$TMPDIR") ;; *) rm -rf "$__g_tmp";; esac
+  __g_tmp=""
+}
 
 g_block() {
   local x
@@ -58,19 +91,26 @@ g_check_repo_root() {
 
 g_allowed_path() {
   [ -f "$GUARD_DIR/allow-paths.txt" ] || return 1
-  printf '/%s' "$1" | grep -qE -f <(g_pats "$GUARD_DIR/allow-paths.txt")
+  printf '/%s' "$1" | grep -qE -f <(g_pats "$GUARD_DIR/allow-paths.txt") 2>/dev/null
 }
 
+# 单个路径检查：命中时才逐条定位是哪条规则（规则条数少，且只对已命中的路径做）
 g_check_path() {
-  local rel="$1" pat
+  local rel="$1" pp pat
   [ -f "$GUARD_DIR/deny-paths.txt" ] || return 0
   g_allowed_path "$rel" && return 0
+  g_tmp_init; pp="$__g_tmp/pp.$$"
+  g_pats "$GUARD_DIR/deny-paths.txt" > "$pp"
+  if [ ! -s "$pp" ]; then rm -f "$pp"; return 0; fi
+  # 一次判断是否命中，未命中直接返回（绝大多数文件走这条快路径）
+  if ! printf '/%s' "$rel" | grep -qE -f "$pp" 2>/dev/null; then rm -f "$pp"; return 0; fi
   while IFS= read -r pat; do
     case "$pat" in ''|'#'*) continue;; esac
-    if printf '/%s' "$rel" | grep -qE -- "$pat"; then
-      g_block "$rel" "路径命中禁止规则: $pat"; return 0
+    if printf '/%s' "$rel" | grep -qE -- "$pat" 2>/dev/null; then
+      g_block "$rel" "路径命中禁止规则: $pat"; rm -f "$pp"; return 0
     fi
-  done < "$GUARD_DIR/deny-paths.txt"
+  done < "$pp"
+  g_block "$rel" "路径命中禁止规则"; rm -f "$pp"
 }
 
 g_check_size() {
@@ -81,22 +121,26 @@ g_check_size() {
 
 g_skip_content_path() { printf '/%s' "$1" | grep -qE "$G_SKIP_RE"; }
 
+# 单个 blob 判定：截断到 MAX_SCAN_BYTES + 过滤占位值 + 规则匹配；$3 = i 表示忽略大小写
+g_blob_match() {
+  git cat-file -p "$1" 2>/dev/null | head -c "$GUARD_MAX_SCAN_BYTES" \
+    | grep -avEi -- "$G_MOCK_RE" | grep -qa"${3:-}"E -f "$2"
+}
+
 # 内容检查：$1=相对路径  $2=blob 表达式（":path" 或 "<sha>:path"）
-# 高置信度规则大小写敏感、任何目录都查（含二进制）；宽松规则 lang/test/docs 跳过
 g_check_content_blob() {
-  local rel="$1" spec="$2" ps="$TMPDIR/gg.s.$$" po="$TMPDIR/gg.o.$$"
+  local rel="$1" spec="$2" d ps po
   g_allowed_path "$rel" && return 0
+  g_tmp_init; d="$__g_tmp"; ps="$d/ps.$$"; po="$d/po.$$"
   if [ -f "$GUARD_DIR/deny-content.txt" ]; then
     g_pats "$GUARD_DIR/deny-content.txt" > "$ps"
-    if [ -s "$ps" ] && git cat-file -p "$spec" 2>/dev/null | head -c "$GUARD_MAX_SCAN_BYTES" \
-         | grep -vaEi -- "$G_MOCK_RE" | grep -qaE -f "$ps"; then
+    if [ -s "$ps" ] && g_blob_match "$spec" "$ps"; then
       g_block "$rel" "内容命中高置信度密钥特征"; rm -f "$ps" "$po"; return 0
     fi
   fi
   if [ -f "$GUARD_DIR/deny-content-soft.txt" ] && ! g_skip_content_path "$rel"; then
     g_pats "$GUARD_DIR/deny-content-soft.txt" > "$po"
-    if [ -s "$po" ] && git cat-file -p "$spec" 2>/dev/null | head -c "$GUARD_MAX_SCAN_BYTES" \
-         | grep -vaEi -- "$G_MOCK_RE" | grep -qaEi -f "$po"; then
+    if [ -s "$po" ] && g_blob_match "$spec" "$po" i; then
       g_block "$rel" "内容命中密钥赋值特征"; rm -f "$ps" "$po"; return 0
     fi
   fi
@@ -105,66 +149,156 @@ g_check_content_blob() {
 
 g_check_content() { g_check_content_blob "$1" ":$1"; }
 
-# 全量扫描某棵树：路径 + 体积 + 内容（内容用单次 git grep，避免逐文件 fork）
+# ---- 批量层：一次 fork 处理整个索引/整棵树 ----
+
+# 路径层：$1 = 候选路径清单
+g_scan_paths() {
+  local list="$1" d pp
+  [ -s "$list" ] || return 0
+  [ -f "$GUARD_DIR/deny-paths.txt" ] || return 0
+  g_tmp_init; d="$__g_tmp"; pp="$d/bpp.$$"
+  g_pats "$GUARD_DIR/deny-paths.txt" > "$pp"
+  if [ -s "$pp" ]; then
+    # 先用一次 grep 缩小到真正命中的少数路径，再逐条定位规则
+    sed 's|^|/|' "$list" | grep -aE -f "$pp" 2>/dev/null | sed 's|^/||' > "$d/hit.$$"
+    while IFS= read -r p; do
+      [ -n "$p" ] && g_check_path "$p"
+    done < "$d/hit.$$"
+    rm -f "$d/hit.$$"
+  fi
+  rm -f "$pp"
+}
+
+# 体积层：$1 = "sha<TAB>path"；一次 batch-check 取全部大小
+g_scan_sizes() {
+  local pairs="$1" d sizes
+  [ -s "$pairs" ] || return 0
+  g_tmp_init; d="$__g_tmp"; sizes="$d/sz.$$"
+  cut -f1 "$pairs" | sort -u | git cat-file --batch-check='%(objectname) %(objectsize)' 2>/dev/null \
+    | awk '{print $1"\t"$2}' > "$sizes"
+  awk -v max="$GUARD_MAX_FILE_BYTES" -F'\t' '
+    NR==FNR { sz[$1]=$2; next }
+    { s=sz[$1]; if (s != "" && s+0 > max) print $2"\t"s }
+  ' "$sizes" "$pairs" > "$d/big.$$"
+  while IFS=$'\t' read -r rel size; do
+    [ -n "$rel" ] && g_check_size "$rel" "$size"
+  done < "$d/big.$$"
+  rm -f "$sizes" "$d/big.$$"
+}
+
+# 内容层候选：$1 = index | <rev 清单文件>；$2 = 规则文件；$3 = 可选，只保留这些路径
+# 输出 "blob 表达式<TAB>路径"，表达式可直接喂 git cat-file
+g_content_candidates() {
+  local src="$1" pats="$2" only="${3:-}" d raw
+  g_tmp_init; d="$__g_tmp"; raw="$d/cand.$$"
+  : > "$raw"
+  if [ "$src" = "index" ]; then
+    git grep --cached -a -l -z -E -f "$pats" 2>/dev/null | tr '\0' '\n' \
+      | while IFS= read -r p; do [ -n "$p" ] && printf ':%s\t%s\n' "$p" "$p"; done > "$raw"
+  else
+    [ -s "$src" ] || return 0
+    # 分块传 rev，避免大推送时撞上命令行参数长度上限
+    split -l 200 "$src" "$d/chunk.$$." 2>/dev/null
+    for cf in "$d/chunk.$$."*; do
+      [ -s "$cf" ] || continue
+      git grep -a -l -z -E -f "$pats" $(cat "$cf") -- . 2>/dev/null | tr '\0' '\n' \
+        | while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            printf '%s\t%s\n' "$line" "${line#*:}"
+          done >> "$raw"
+    done
+    rm -f "$d/chunk.$$."*
+  fi
+  if [ -n "$only" ] && [ -s "$only" ]; then
+    awk -F'\t' 'NR==FNR { keep[$0]=1; next } ($2 in keep)' "$only" "$raw" > "$raw.f" 2>/dev/null
+    mv "$raw.f" "$raw"
+  fi
+  cat "$raw"
+  rm -f "$raw"
+}
+
+# 内容层：$1 = index | <rev 清单文件>；$2 = 可选，只查这些路径
+g_scan_contents() {
+  local src="$1" only="${2:-}" d ps po spec rel
+  g_tmp_init; d="$__g_tmp"; ps="$d/cps.$$"; po="$d/cpo.$$"
+  g_pats "$GUARD_DIR/deny-content.txt" > "$ps" 2>/dev/null
+  g_pats "$GUARD_DIR/deny-content-soft.txt" > "$po" 2>/dev/null
+
+  if [ -s "$ps" ]; then
+    while IFS=$'\t' read -r spec rel; do
+      [ -z "$rel" ] && continue
+      g_allowed_path "$rel" && continue
+      g_blob_match "$spec" "$ps" || continue
+      g_block "$rel" "内容命中高置信度密钥特征"
+    done < <(g_content_candidates "$src" "$ps" "$only")
+  fi
+
+  if [ -s "$po" ]; then
+    while IFS=$'\t' read -r spec rel; do
+      [ -z "$rel" ] && continue
+      g_allowed_path "$rel" && continue
+      g_skip_content_path "$rel" && continue
+      g_blob_match "$spec" "$po" i || continue
+      g_block "$rel" "内容命中密钥赋值特征"
+    done < <(g_content_candidates "$src" "$po" "$only")
+  fi
+  rm -f "$ps" "$po"
+}
+
+# 全量扫描某棵树：路径 + 体积 + 内容
 g_scan_tree() {
-  local sha="$1" pp="$TMPDIR/gg.pp.$$" ps="$TMPDIR/gg.ps.$$" po="$TMPDIR/gg.po.$$" tree="$TMPDIR/gg.tree.$$" rel
-  git ls-tree -r -l "$sha" > "$tree" 2>/dev/null || { rm -f "$tree"; return 0; }
-  g_pats "$GUARD_DIR/deny-paths.txt"        > "$pp"
-  g_pats "$GUARD_DIR/deny-content.txt"      > "$ps"
-  g_pats "$GUARD_DIR/deny-content-soft.txt" > "$po"
+  local sha="$1" d names pairs revs
+  g_tmp_init; d="$__g_tmp"; names="$d/names.$$"; pairs="$d/pairs.$$"; revs="$d/rev.$$"
+  git ls-tree -r -l "$sha" 2>/dev/null | awk -F'\t' '{split($1,f," "); print f[3]"\t"$2}' > "$pairs" || { rm -f "$pairs"; return 0; }
+  [ -s "$pairs" ] || { rm -f "$pairs"; return 0; }
+  cut -f2 "$pairs" > "$names"
+  g_scan_paths "$names"
+  g_scan_sizes "$pairs"
+  printf '%s\n' "$sha" > "$revs"
+  g_scan_contents "$revs"
+  rm -f "$names" "$pairs" "$revs"
+}
 
-  while IFS= read -r rel; do
-    g_block "$rel" "文件过大，疑似数据库/备份/构建产物"
-  done < <(awk -F'\t' -v max="$GUARD_MAX_FILE_BYTES" '{n=split($1,a," "); if (a[4]+0>max) print $2}' "$tree")
-
-  while IFS= read -r rel; do
-    [ -z "$rel" ] && continue
-    g_allowed_path "$rel" && continue
-    g_block "$rel" "路径命中禁止规则"
-  done < <(awk -F'\t' '{print "/" $2}' "$tree" | grep -aE -f "$pp" 2>/dev/null | sed 's|^/||')
-
-  while IFS= read -r rel; do
-    [ -z "$rel" ] && continue
-    g_allowed_path "$rel" && continue
-    g_block "$rel" "内容命中高置信度密钥特征"
-  done < <(git grep -I -n -E -f "$ps" "$sha" -- . 2>/dev/null \
-             | grep -avE -- "$G_MOCK_RE" | awk -F: '{print $2}' | sort -u)
-
-  while IFS= read -r rel; do
-    [ -z "$rel" ] && continue
-    g_allowed_path "$rel" && continue
-    g_skip_content_path "$rel" && continue
-    g_block "$rel" "内容命中密钥赋值特征"
-  done < <(git grep -I -n -E -f "$po" "$sha" -- . 2>/dev/null \
-             | grep -avEi -- "$G_MOCK_RE" | awk -F: '{print $2}' | sort -u)
-
-  rm -f "$pp" "$ps" "$po" "$tree"
+# 索引（暂存区）扫描：只查本次暂存的新增/修改
+g_scan_index() {
+  local d pairs names staged revs
+  g_tmp_init; d="$__g_tmp"; pairs="$d/ipairs.$$"; names="$d/inames.$$"; staged="$d/staged.$$"
+  git diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null | tr '\0' '\n' | grep -v '^$' > "$staged"
+  if [ ! -s "$staged" ]; then rm -f "$pairs" "$names" "$staged"; return 0; fi
+  git ls-files -s -z 2>/dev/null | tr '\0' '\n' \
+    | awk -F'\t' '{split($1,f," "); print f[2]"\t"$2}' \
+    | awk -F'\t' 'NR==FNR { keep[$0]=1; next } ($2 in keep)' "$staged" - > "$pairs"
+  [ -s "$pairs" ] || { rm -f "$pairs" "$names" "$staged"; return 0; }
+  cut -f2 "$pairs" > "$names"
+  g_scan_paths "$names"
+  g_scan_sizes "$pairs"
+  g_scan_contents index "$staged"
+  rm -f "$pairs" "$names" "$staged"
 }
 
 # 扫描"服务器上还没有的提交"的每一处改动（拦住加进去又删掉的历史）
 g_scan_new_commits() {
-  local tip="$1" c rel
-  while IFS= read -r c; do
-    [ -z "$c" ] && continue
-    while IFS= read -r rel; do
-      [ -z "$rel" ] && continue
-      g_check_path "$rel"
-      g_check_size "$rel" "$(git cat-file -s "$c:$rel" 2>/dev/null)"
-      g_check_content_blob "$rel" "$c:$rel"
-    done < <(git diff-tree --root --no-commit-id --name-only -r --diff-filter=ACMR "$c" 2>/dev/null)
-  done < <(git rev-list "$tip" --not --remotes 2>/dev/null)
+  local tip="$1" d revs raw pairs names
+  g_tmp_init; d="$__g_tmp"; revs="$d/nrevs.$$"; raw="$d/nraw.$$"; pairs="$d/npairs.$$"; names="$d/nnames.$$"
+  git rev-list "$tip" --not --remotes 2>/dev/null > "$revs"
+  if [ ! -s "$revs" ]; then rm -f "$revs"; return 0; fi
+  git diff-tree --stdin --root -r --raw --no-abbrev --diff-filter=ACMR < "$revs" 2>/dev/null \
+    | awk -F'\t' '/^:/{split($1,f," "); print f[4]"\t"$2}' | sort -u > "$pairs"
+  if [ -s "$pairs" ]; then
+    cut -f2 "$pairs" > "$names"
+    g_scan_paths "$names"
+    g_scan_sizes "$pairs"
+  fi
+  g_scan_contents "$revs"
+  rm -f "$revs" "$raw" "$pairs" "$names"
 }
 
 guard_pre_commit() {
-  local top f
+  local top
   top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+  g_tmp_init; trap 'g_tmpclean' EXIT
   g_check_repo_root "$top" || { g_report "提交"; exit 1; }
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    g_check_path "$f"
-    g_check_size "$f" "$(git cat-file -s ":$f" 2>/dev/null)"
-    g_check_content "$f"
-  done < <(git diff --cached --name-only --diff-filter=ACMR -z | tr '\0' '\n')
+  g_scan_index
   g_check_fingerprints index
   g_report "提交"
 }
@@ -172,6 +306,7 @@ guard_pre_commit() {
 guard_pre_push() {
   local top lref lsha rref rsha tips=() sha
   top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+  g_tmp_init; trap 'g_tmpclean' EXIT
   g_check_repo_root "$top" || { g_report "推送"; exit 1; }
   while read -r lref lsha rref rsha; do
     [ -z "$lsha" ] && continue
@@ -200,8 +335,9 @@ g_fp_manifest() { printf '%s/private.blobs' "$GUARD_DIR"; }
 
 # 生成指纹清单：按"相对根路径"匹配（绝对路径可能自带 /data/ 之类前缀，会误命中目录规则）
 g_fp_snapshot() {
-  local man; man=$(g_fp_manifest)
-  local root rels="$TMPDIR/gg.rels.$$" rels2="$TMPDIR/gg.rels2.$$" hashes="$TMPDIR/gg.h.$$"
+  local man d rels rels2 hashes root
+  man=$(g_fp_manifest); g_tmp_init; d="$__g_tmp"
+  rels="$d/rels.$$"; rels2="$d/rels2.$$"; hashes="$d/h.$$"
   : > "$man.tmp"
   while IFS= read -r root; do
     case "$root" in ''|'#'*) continue;; esac
@@ -223,21 +359,63 @@ g_fp_snapshot() {
   echo "  有效指纹 $(wc -l < "$man") 条（只含运行时私有文件）"
 }
 
+# 指纹层同样尊重 allow-paths.txt（否则报告里提示的放行办法对指纹无效）
 g_check_fingerprints() {
-  local man ids; man=$(g_fp_manifest)
+  local man ids d fp src id rel origin
+  man=$(g_fp_manifest)
   [ -s "$man" ] || return 0
-  ids="$TMPDIR/gg.ids.$$"; cut -f1 "$man" | sort -u > "$ids"
-  local src="$1" id rel origin
+  g_tmp_init; d="$__g_tmp"; ids="$d/ids.$$"; fp="$d/fp.$$"
+  cut -f1 "$man" | sort -u > "$ids"
+  src="$1"
   if [ "$src" = "index" ]; then
-    while IFS=$'\t' read -r id rel; do
-      origin=$(grep -m1 -F "$id"$'\t' "$man" | cut -f2)
-      g_block "$rel" "内容与运行时文件完全相同: ${origin/#$HOME/~}"
-    done < <(git ls-files -s 2>/dev/null | awk '{id=$2; sub(/^[^\t]*\t/,""); print id"\t"$0}' | grep -Ff "$ids")
+    git ls-files -s -z 2>/dev/null | tr '\0' '\n' \
+      | awk -F'\t' '{split($1,f," "); print f[2]"\t"$2}' > "$d/ls.$$"
   else
-    while IFS=$'\t' read -r id rel; do
-      origin=$(grep -m1 -F "$id"$'\t' "$man" | cut -f2)
-      g_block "$rel" "内容与运行时文件完全相同: ${origin/#$HOME/~}"
-    done < <(git ls-tree -r "$src" 2>/dev/null | awk '{id=$3; sub(/^[^\t]*\t/,""); print id"\t"$0}' | grep -Ff "$ids")
+    git ls-tree -r "$src" 2>/dev/null | awk -F'\t' '{split($1,f," "); print f[3]"\t"$2}' > "$d/ls.$$"
   fi
-  rm -f "$ids"
+  grep -Ff "$ids" "$d/ls.$$" > "$fp" 2>/dev/null || : > "$fp"
+  while IFS=$'\t' read -r id rel; do
+    [ -z "$id" ] && continue
+    g_allowed_path "$rel" && continue
+    origin=$(grep -m1 -F "$id"$'\t' "$man" | cut -f2)
+    g_block "$rel" "内容与运行时文件完全相同: ${origin/#$HOME/~}"
+  done < "$fp"
+  rm -f "$ids" "$fp" "$d/ls.$$"
+}
+
+# 单个工作区文件的内容检查（供 git-guard check 使用，不依赖 index）
+# $1=相对路径（用于 allow-paths / 跳过规则）  $2=实际文件路径（缺省同 $1）
+g_check_content_file() {
+  local rel="$1" f="${2:-$1}" d ps po
+  g_allowed_path "$rel" && return 0
+  g_tmp_init; d="$__g_tmp"; ps="$d/fps.$$"; po="$d/fpo.$$"
+  if [ -f "$GUARD_DIR/deny-content.txt" ]; then
+    g_pats "$GUARD_DIR/deny-content.txt" > "$ps"
+    if [ -s "$ps" ] && head -c "$GUARD_MAX_SCAN_BYTES" "$f" 2>/dev/null \
+         | grep -avEi -- "$G_MOCK_RE" | grep -qaE -f "$ps"; then
+      g_block "$rel" "内容命中高置信度密钥特征"; rm -f "$ps" "$po"; return 0
+    fi
+  fi
+  if [ -f "$GUARD_DIR/deny-content-soft.txt" ] && ! g_skip_content_path "$rel"; then
+    g_pats "$GUARD_DIR/deny-content-soft.txt" > "$po"
+    if [ -s "$po" ] && head -c "$GUARD_MAX_SCAN_BYTES" "$f" 2>/dev/null \
+         | grep -avEi -- "$G_MOCK_RE" | grep -qaEi -f "$po"; then
+      g_block "$rel" "内容命中密钥赋值特征"; rm -f "$ps" "$po"; return 0
+    fi
+  fi
+  rm -f "$ps" "$po"
+}
+
+# 单个工作区文件的指纹检查
+# $1=相对路径  $2=实际文件路径（缺省同 $1）
+g_check_fingerprint_file() {
+  local rel="$1" f="${2:-$1}" man id origin
+  man=$(g_fp_manifest)
+  [ -s "$man" ] || return 0
+  g_allowed_path "$rel" && return 0
+  id=$(git hash-object "$f" 2>/dev/null) || return 0
+  [ -n "$id" ] || return 0
+  origin=$(grep -m1 -F "$id"$'\t' "$man" 2>/dev/null | cut -f2)
+  [ -n "$origin" ] && g_block "$rel" "内容与运行时文件完全相同: ${origin/#$HOME/~}"
+  return 0
 }

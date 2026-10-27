@@ -10,51 +10,67 @@ GUARD_DIR="${GUARD_DIR:-$HOME/.config/git/guard}"
 . "$HOME/.config/git/guard-lib.sh"
 ROOT="${WSN_ROOT:-$HOME/work}"
 STATE="${WSN_STATE:-$GUARD_DIR/wsnap}"
+# TMPDIR 兜底（cron/CI 里常未设置；Android 上 /tmp 通常不可写）
+if [ ! -d "${TMPDIR:-/nonexistent}" ] || [ ! -w "${TMPDIR:-/nonexistent}" ]; then
+  for _c in /tmp "$HOME/.cache" "$HOME/.tmp" "${PREFIX:-}/tmp"; do
+    [ -d "$_c" ] && [ -w "$_c" ] && { TMPDIR="$_c"; break; }
+  done
+fi
+[ -d "${TMPDIR:-/nonexistent}" ] && [ -w "${TMPDIR:-/nonexistent}" ] || { echo "wsnap: 找不到可写的临时目录" >&2; exit 2; }
+export TMPDIR
+WT=""
+wtmp_init() { [ -n "$WT" ] || { WT=$(mktemp -d "$TMPDIR/wsnap.XXXXXX" 2>/dev/null) || WT="$TMPDIR"; }; }
+wtmpclean() { case "$WT" in ''|"$TMPDIR") ;; *) rm -rf "$WT";; esac; WT=""; }
 BASE="$STATE/base.tsv"
 PRIV="$GUARD_DIR/private.blobs"
+TSFILE="$STATE/.wsnap.ts"
 PRUNE=( -name .git -o -name node_modules -o -name build -o -name .gradle -o -name .kotlin -o -name __pycache__ -o -name dist -o -name .cache -o -name .idea )
 
 die() { echo "wsnap: $*" >&2; exit 2; }
 walk() { find . \( "${PRUNE[@]}" \) -prune -o -type f -printf '%P\t%s\t%T@\n' 2>/dev/null; }
 
 cmd_init() {
+  trap 'wtmpclean' EXIT
+  wtmp_init
   mkdir -p "$STATE" || die "无法创建 $STATE"
   cd "$ROOT" 2>/dev/null || die "工作区不存在: $ROOT"
-  walk > "$TMPDIR/ws.cur" || die "遍历失败"
-  cut -f1 "$TMPDIR/ws.cur" > "$TMPDIR/ws.paths"
-  git hash-object --stdin-paths < "$TMPDIR/ws.paths" > "$TMPDIR/ws.h" 2>/dev/null || die "哈希失败"
-  paste <(cut -f1 "$TMPDIR/ws.cur") <(cut -f2,3 "$TMPDIR/ws.cur") "$TMPDIR/ws.h" > "$BASE"
-  rm -f "$TMPDIR/ws.cur" "$TMPDIR/ws.paths" "$TMPDIR/ws.h"
+  walk > "$WT/ws.cur" || die "遍历失败"
+  cut -f1 "$WT/ws.cur" > "$WT/ws.paths"
+  git hash-object --stdin-paths < "$WT/ws.paths" > "$WT/ws.h" 2>/dev/null || die "哈希失败"
+  paste <(cut -f1 "$WT/ws.cur") <(cut -f2,3 "$WT/ws.cur") "$WT/ws.h" > "$BASE"
+  rm -f "$WT/ws.cur" "$WT/ws.paths" "$WT/ws.h"
   echo "基线已建立: ${BASE/#$HOME/~}  ($(wc -l < "$BASE") 个文件)"
 }
 
 cmd_verify() {
+  trap 'wtmpclean' EXIT
+  wtmp_init
   local accept=0 prompt=0
   for a in "$@"; do case "$a" in --accept) accept=1;; --prompt) prompt=1;; esac; done
   [ -s "$BASE" ] || { echo "还没有基线，先跑: wsnap init" >&2; exit 2; }
   cd "$ROOT" 2>/dev/null || die "工作区不存在: $ROOT"
   local t0=$(date +%s%N)
 
-  walk > "$TMPDIR/ws.cur" || die "遍历失败"
+  walk > "$WT/ws.cur" || die "遍历失败"
   awk -F'\t' '
     NR==FNR { os[$1]=$2; om[$1]=$3; oh[$1]=$4; next }
     { cn[$1]=1
       if (!($1 in os))      print "N\t" $1
       else if ($2!=os[$1] || $3!=om[$1]) print "M\t" $1 }
     END { for (p in os) if (!(p in cn)) print "D\t" p }
-  ' "$BASE" "$TMPDIR/ws.cur" > "$TMPDIR/ws.diff"
+  ' "$BASE" "$WT/ws.cur" > "$WT/ws.diff"
 
-  awk -F'\t' '$1!="D"{print $2}' "$TMPDIR/ws.diff" > "$TMPDIR/ws.paths"
-  : > "$TMPDIR/ws.h"
-  if [ -s "$TMPDIR/ws.paths" ]; then
-    git hash-object --stdin-paths < "$TMPDIR/ws.paths" > "$TMPDIR/ws.h" 2>/dev/null
+  awk -F'\t' '$1!="D"{print $2}' "$WT/ws.diff" > "$WT/ws.paths"
+  : > "$WT/ws.h"
+  if [ -s "$WT/ws.paths" ]; then
+    git hash-object --stdin-paths < "$WT/ws.paths" > "$WT/ws.h" 2>/dev/null
   fi
-  paste "$TMPDIR/ws.paths" "$TMPDIR/ws.h" > "$TMPDIR/ws.hp" 2>/dev/null || : > "$TMPDIR/ws.hp"
+  paste "$WT/ws.paths" "$WT/ws.h" > "$WT/ws.hp" 2>/dev/null || : > "$WT/ws.hp"
 
   local nN nD
-  nN=$(awk -F'\t' '$1=="N"' "$TMPDIR/ws.diff" | wc -l)
-  nD=$(awk -F'\t' '$1=="D"' "$TMPDIR/ws.diff" | wc -l)
-  local nM=$(( $(wc -l < "$TMPDIR/ws.diff") - nN - nD ))
+  nN=$(awk -F'\t' '$1=="N"' "$WT/ws.diff" | wc -l)
+  nD=$(awk -F'\t' '$1=="D"' "$WT/ws.diff" | wc -l)
+  local nM=$(( $(wc -l < "$WT/ws.diff") - nN - nD ))
 
   local -a bad=() warn=() info=() dl=()
   local p id origin m
@@ -74,17 +90,17 @@ cmd_verify() {
       warn+=("⚠  路径可疑      $p  (${__g_reasons[0]})"); continue
     fi
     if [ -f "$p" ] && [ -f "$GUARD_DIR/deny-content.txt" ] && [ "$(stat -c %s "$p" 2>/dev/null || echo 0)" -lt 1048576 ]; then
-      g_pats "$GUARD_DIR/deny-content.txt" > "$TMPDIR/ws.ps"
-      if [ -s "$TMPDIR/ws.ps" ] && head -c 1048576 "$p" 2>/dev/null | grep -vaEi -- "$G_MOCK_RE" | grep -qaE -f "$TMPDIR/ws.ps"; then
+      g_pats "$GUARD_DIR/deny-content.txt" > "$WT/ws.ps"
+      if [ -s "$WT/ws.ps" ] && head -c 1048576 "$p" 2>/dev/null | grep -vaEi -- "$G_MOCK_RE" | grep -qaE -f "$WT/ws.ps"; then
         bad+=("⛔ 密钥特征      $p"); continue
       fi
     fi
     info+=("·  $p")
-  done < "$TMPDIR/ws.hp"
+  done < "$WT/ws.hp"
 
   while IFS=$'\t' read -r t p; do
     [ "$t" = "D" ] && dl+=("·  已删除  $p")
-  done < "$TMPDIR/ws.diff"
+  done < "$WT/ws.diff"
 
   local t1; t1=$(date +%s%N); local ms=$(( (t1 - t0) / 1000000 ))
 
@@ -103,16 +119,18 @@ cmd_verify() {
   for x in "${dl[@]:-}"; do [ -n "$x" ] && echo "  $x"; done
 
   if [ $accept -eq 1 ]; then cmd_accept; echo "  已接受为新的基线"; fi
-  [ "${#bad[@]}" -gt 0 ] || [ "${#warn[@]}" -gt 0 ] && return 3
+  if [ "${#bad[@]}" -gt 0 ] || [ "${#warn[@]}" -gt 0 ]; then return 3; fi
   return 0
 }
 
 cmd_accept() {
+  trap 'wtmpclean' EXIT
+  wtmp_init
   cd "$ROOT" 2>/dev/null || return 0
-  walk > "$TMPDIR/ws.cur"
-  cut -f1 "$TMPDIR/ws.cur" > "$TMPDIR/ws.paths"
-  git hash-object --stdin-paths < "$TMPDIR/ws.paths" > "$TMPDIR/ws.h" 2>/dev/null
-  paste <(cut -f1 "$TMPDIR/ws.cur") <(cut -f2,3 "$TMPDIR/ws.cur") "$TMPDIR/ws.h" > "$BASE"
+  walk > "$WT/ws.cur"
+  cut -f1 "$WT/ws.cur" > "$WT/ws.paths"
+  git hash-object --stdin-paths < "$WT/ws.paths" > "$WT/ws.h" 2>/dev/null
+  paste <(cut -f1 "$WT/ws.cur") <(cut -f2,3 "$WT/ws.cur") "$WT/ws.h" > "$BASE"
 }
 
 cmd_watch() {
@@ -126,12 +144,15 @@ cmd_watch() {
 
 cmd_prompt() {
   case "$PWD" in "$ROOT"|"$ROOT"/*) ;; *) return 0;; esac
+  wtmp_init
+  trap 'wtmpclean' EXIT
   local now last d
   now=${EPOCHSECONDS:-$(date +%s)}
-  last=$(cat "$TMPDIR/.wsnap.ts" 2>/dev/null || echo 0)
+  mkdir -p "$STATE" 2>/dev/null
+  last=$(cat "$TSFILE" 2>/dev/null || echo 0)
   d=$(( now - last ))
   [ "$d" -lt 8 ] 2>/dev/null && return 0
-  printf '%s' "$now" > "$TMPDIR/.wsnap.ts" 2>/dev/null
+  printf '%s' "$now" > "$TSFILE" 2>/dev/null
   cmd_verify --prompt
 }
 

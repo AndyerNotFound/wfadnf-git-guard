@@ -10,5 +10,13 @@ for d in $(find "${1:-$HOME}" -maxdepth 5 -name .git -prune -print 2>/dev/null |
   done
   sed -i '/^# >>> git-guard/,/^# <<< git-guard/d' "$d/.git/info/exclude" 2>/dev/null
 done
-git config --global --unset init.templateDir 2>/dev/null || true
+# 还原安装前记录的原模板目录；没有记录才清空
+prev_file="$GUARD_ROOT/guard/prev-templateDir"
+if [ -s "$prev_file" ]; then
+  git config --global init.templateDir "$(cat "$prev_file")"
+  echo "已还原原 init.templateDir: $(cat "$prev_file")"
+  rm -f "$prev_file"
+else
+  git config --global --unset init.templateDir 2>/dev/null || true
+fi
 echo "已卸载。规则仍保留在 $GUARD_ROOT（需要时手动删）。"

@@ -21,6 +21,12 @@ for f in "$SRC"/share/guard/*.txt; do
   [ -f "$dst" ] || { cp "$f" "$dst"; echo "  规则: ${dst/#$HOME/~}"; }
 done
 
+# 保存原有的 init.templateDir，卸载时还原（否则用户原有模板配置会被永久丢掉）
+prev_tpl=$(git config --global --get init.templateDir 2>/dev/null || true)
+if [ -n "$prev_tpl" ] && [ "$prev_tpl" != "$GUARD_ROOT/template" ]; then
+  printf '%s' "$prev_tpl" > "$GUARD_DIR/prev-templateDir"
+  echo "  已记录原 init.templateDir: $prev_tpl（卸载时还原）"
+fi
 git config --global init.templateDir "$GUARD_ROOT/template"
 [ -f "$GUARD_ROOT/ignore" ] || cp "$SRC/share/ignore" "$GUARD_ROOT/ignore" 2>/dev/null || true
 [ -f "$GUARD_ROOT/ignore" ] && git config --global core.excludesFile "$GUARD_ROOT/ignore"
