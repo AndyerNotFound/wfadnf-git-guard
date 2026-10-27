@@ -8,27 +8,27 @@
   Four layers — <b>path · size · content · fingerprint</b> — checked before git writes anything.
 </p>
 
-<p align="center"><a href="README.md">中文</a></p>
+<p align="center"><a href="README.zh.md">中文</a></p>
 
 ## Example output of a blocked commit
 
 ```text
 $ git commit -m "sync runtime"
 
-============ git-guard 已拦截提交 ============
+============ git-guard blocked commit ============
   x data/config.json
-      -> 路径命中禁止规则: (^|/)data/
+      -> path matched deny rule: (^|/)data/
   x key.js
-      -> 内容命中高置信度密钥特征
+      -> content matched high-confidence secret pattern
   x notes.txt
-      -> 内容命中密钥赋值特征
+      -> content matched secret-assignment pattern
 ---------------------------------------------------------
-通常是运行时数据/密钥/配置被 add 进来了。处理办法：
-  git restore --staged <file>        # 取消暂存
-  git rm --cached <file>             # 已入库的移出索引
-  echo '<pattern>' >> .gitignore     # 长期忽略
-规则: ~/.config/git/guard/{deny-paths,deny-content,deny-content-soft}.txt
-误伤可加到 allow-paths.txt；确认无害才: GUARD_OVERRIDE=1 git ...
+Runtime data / secrets / config were probably added by mistake. How to fix:
+  git restore --staged <file>        # unstage
+  git rm --cached <file>             # remove tracked file from index
+  echo '<pattern>' >> .gitignore     # ignore permanently
+Rules: ~/.config/git/guard/{deny-paths,deny-content,deny-content-soft}.txt
+False positives go into allow-paths.txt; only after confirming it is harmless: GUARD_OVERRIDE=1 git ...
 =========================================================
 ```
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 自测：全部在临时目录里跑，不碰真实 $HOME
+# Self-test: runs entirely in a temp dir, never touches the real $HOME
 set -uo pipefail
 SRC=$(cd "$(dirname "$0")/.." && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export GUARD_ROOT="$T/root" GUARD_DIR="$T/root/guard"
-# 自测不往手机上推真实通知
+# Self-test must not push real notifications to the phone
 export GUARD_NOTIFY=0
 mkdir -p "$GUARD_ROOT/template/hooks" "$GUARD_ROOT/template/info" "$GUARD_DIR"
 cp "$SRC/lib/guard-lib.sh" "$GUARD_ROOT/"
@@ -17,7 +17,7 @@ pass=0; fail=0
 ok(){ pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 no(){ fail=$((fail+1)); printf '  FAIL %s\n' "$1"; }
 
-# 造一个"运行时"目录并生成指纹
+# Create a fake "runtime" dir and generate fingerprints
 RT="$T/runtime"; mkdir -p "$RT/data"
 printf '{"channels":[{"key":"9f3a7b2c1d8e4f6a0b5c9d2e"}]}' > "$RT/data/config.Prod.json"
 printf 'secret-token-abcdefghijklmnop\n' > "$RT/data/.sessionkey"
@@ -34,32 +34,32 @@ blocked(){ git add -A >/dev/null 2>&1; git commit -qm x >/dev/null 2>&1; [ $? -n
 passed(){ git add -A >/dev/null 2>&1; git commit -qm x >/dev/null 2>&1; [ $? -eq 0 ]; }
 reset_repo(){ cd "$T/${1:-r}"; git reset -q --hard HEAD >/dev/null 2>&1; git clean -qfd; }
 
-echo "== 提交层 =="
+echo "== Commit layer =="
 new_repo r
-echo 'const a=1' > a.js; passed && ok "普通代码放行" || no "普通代码放行"
+echo 'const a=1' > a.js; passed && ok "plain code passes" || no "plain code passes"
 reset_repo r
 mkdir -p data; echo '{}' > data/cfg.json
-blocked && ok "根 data/ 拦截" || no "根 data/ 拦截"; reset_repo r
+blocked && ok "root data/ blocked" || no "root data/ blocked"; reset_repo r
 mkdir -p app/data; cp "$RT/data/config.Prod.json" app/data/x.json
-blocked && ok "嵌套 app/data/ 拦截" || no "嵌套 app/data/ 拦截"; reset_repo r
+blocked && ok "nested app/data/ blocked" || no "nested app/data/ blocked"; reset_repo r
 mkdir -p test; cp "$RT/data/config.Prod.json" test/fx.json
-blocked && ok "test/ 内真实私有文件拦截" || no "test/ 内真实私有文件拦截"; reset_repo r
+blocked && ok "real private file inside test/ blocked" || no "real private file inside test/ blocked"; reset_repo r
 cp "$RT/data/config.Prod.json" notes.dat
-blocked && ok "改名 .dat（指纹）拦截" || no "改名 .dat（指纹）拦截"; reset_repo r
+blocked && ok "renamed .dat blocked (fingerprint)" || no "renamed .dat blocked (fingerprint)"; reset_repo r
 printf 'const k="sk-%s";\n' "abcdefghijklmnopqrstuvwx" > k.js
-blocked && ok "手写密钥拦截" || no "手写密钥拦截"; reset_repo r
+blocked && ok "handwritten secret blocked" || no "handwritten secret blocked"; reset_repo r
 printf '{"channels":[{"key":"9f3a7b2c1d8e4f6a0b5c9d2e"}]}' > ch.json
-blocked && ok "字段名 key 拦截" || no "字段名 key 拦截"; reset_repo r
+blocked && ok "key field name blocked" || no "key field name blocked"; reset_repo r
 mkdir -p app/src/main/java/com/x/data; echo 'class A{}' > app/src/main/java/com/x/data/A.kt
-passed && ok "源码 data 包放行" || no "源码 data 包放行"; reset_repo r
+passed && ok "source data package passes" || no "source data package passes"; reset_repo r
 head -c 6000000 /dev/zero | tr '\0' 'a' > big.txt
-blocked && ok "6MB 文件拦截" || no "6MB 文件拦截"; reset_repo r
+blocked && ok "6MB file blocked" || no "6MB file blocked"; reset_repo r
 
-echo "== 推送层 =="
+echo "== Push layer =="
 new_repo p; git init -q --bare "$T/bare.git"; git remote add origin "$T/bare.git"
 mkdir -p data; cp "$RT/data/config.Prod.json" data/c.json
 git add -f data >/dev/null 2>&1; git commit -qm leak --no-verify >/dev/null 2>&1
-git push -q origin HEAD:main >/dev/null 2>&1; [ $? -ne 0 ] && ok "--no-verify 后推送被拦" || no "--no-verify 后推送被拦"
+git push -q origin HEAD:main >/dev/null 2>&1; [ $? -ne 0 ] && ok "push blocked despite --no-verify" || no "push blocked despite --no-verify"
 
 new_repo m; git init -q --bare "$T/bare2.git"; git remote add origin "$T/bare2.git"
 git checkout -qb br; mkdir -p data; cp "$RT/data/config.Prod.json" data/c.json
@@ -67,109 +67,109 @@ git add -f data >/dev/null 2>&1; git commit -qm leak --no-verify >/dev/null 2>&1
 git checkout -q master 2>/dev/null || git checkout -q main
 echo m > m.txt; git add m.txt; git commit -qm m >/dev/null 2>&1
 git merge br --no-edit >/dev/null 2>&1
-git push -q origin HEAD:main >/dev/null 2>&1; [ $? -ne 0 ] && ok "merge 带入 data 被拦" || no "merge 带入 data 被拦"
+git push -q origin HEAD:main >/dev/null 2>&1; [ $? -ne 0 ] && ok "push blocked when merge brings in data" || no "push blocked when merge brings in data"
 
-echo "== 受保护目录 =="
+echo "== Protected roots =="
 mkdir -p "$RT/repo"; cd "$RT/repo"; git init -q .; git config user.email t@t; git config user.name t
 cp "$GUARD_ROOT/template/hooks/"* .git/hooks/
 echo x > a.txt; git add a.txt; git commit -qm x >/dev/null 2>&1
-[ $? -ne 0 ] && ok "受保护目录内禁止提交" || no "受保护目录内禁止提交"
+[ $? -ne 0 ] && ok "commit denied inside protected root" || no "commit denied inside protected root"
 
-echo "== 二进制与放行 =="
+echo "== Binary content and overrides =="
 new_repo b1
 printf '\000\001sk-%s\000\377\n' "abcdefghijklmnopqrstuvwx" > blob.bin
-blocked && ok "二进制内嵌密钥拦截" || no "二进制内嵌密钥拦截"; reset_repo b1
+blocked && ok "binary-embedded secret blocked" || no "binary-embedded secret blocked"; reset_repo b1
 new_repo b2
 printf 'const k="sk-%s";\n' "abcdefghijklmnopqrstuvwx" > k.js
 GUARD_OVERRIDE=1 git add -A >/dev/null 2>&1
 GUARD_OVERRIDE=1 git commit -qm x >/dev/null 2>&1
-[ $? -eq 0 ] && ok "GUARD_OVERRIDE 单次放行" || no "GUARD_OVERRIDE 单次放行"; reset_repo b2
+[ $? -eq 0 ] && ok "GUARD_OVERRIDE one-shot bypass" || no "GUARD_OVERRIDE one-shot bypass"; reset_repo b2
 new_repo b3
 mkdir -p fixtures; printf 'const k="sk-%s";\n' "abcdefghijklmnopqrstuvwx" > fixtures/k.js
 echo '^/fixtures/' >> "$GUARD_DIR/allow-paths.txt"
-passed && ok "allow-paths 放行" || no "allow-paths 放行"
+passed && ok "allow-paths lets it pass" || no "allow-paths lets it pass"
 sed -i '$d' "$GUARD_DIR/allow-paths.txt"; reset_repo b3
 
-echo "== 临时目录兜底 =="
+echo "== TMPDIR fallback =="
 new_repo t1
 mkdir -p data; echo '{}' > data/c.json
 git add -f data >/dev/null 2>&1
 env -u TMPDIR bash -c '. "$GUARD_ROOT/guard-lib.sh"; guard_pre_commit' >/dev/null 2>&1
-[ $? -ne 0 ] && ok "无 TMPDIR 仍能拦截" || no "无 TMPDIR 仍能拦截"; reset_repo t1
+[ $? -ne 0 ] && ok "still blocks without TMPDIR" || no "still blocks without TMPDIR"; reset_repo t1
 rm -rf "$TMPDIR"/gg.* 2>/dev/null
 bash -c '. "$GUARD_ROOT/guard-lib.sh"; g_tmp_init; g_tmpclean' >/dev/null 2>&1
-[ "$(ls -d "$TMPDIR"/gg.* 2>/dev/null | wc -l)" -eq 0 ] && ok "临时目录不残留" || no "临时目录不残留"
+[ "$(ls -d "$TMPDIR"/gg.* 2>/dev/null | wc -l)" -eq 0 ] && ok "no temp dirs left behind" || no "no temp dirs left behind"
 
-echo "== 推送层二进制 =="
+echo "== Push layer binary =="
 new_repo p2; git init -q --bare "$T/bare3.git"; git remote add origin "$T/bare3.git"
 printf '\000sk-%s\000\n' "abcdefghijklmnopqrstuvwx" > blob.bin
 git add -A >/dev/null 2>&1; git commit -qm leak --no-verify >/dev/null 2>&1
 git push -q origin HEAD:master >/dev/null 2>&1
-[ $? -ne 0 ] && ok "推送层拦二进制密钥" || no "推送层拦二进制密钥"
+[ $? -ne 0 ] && ok "push layer blocks binary secret" || no "push layer blocks binary secret"
 
 echo "== wsnap =="
 WS="$T/ws"; mkdir -p "$WS/sub"; echo a > "$WS/a.txt"; echo b > "$WS/sub/b.txt"
 run_wsnap(){ WSN_ROOT="$WS" WSN_STATE="$GUARD_DIR/wsnap" "$SRC/bin/wsnap" "$@" 2>&1; }
 run_wsnap init >/dev/null
-run_wsnap verify | grep -q "0 新增 / 0 修改 / 0 删除" && ok "wsnap 基线无变化" || no "wsnap 基线无变化"
+run_wsnap verify | grep -q "0 added / 0 modified / 0 deleted" && ok "wsnap baseline clean" || no "wsnap baseline clean"
 echo c > "$WS/c.txt"
-run_wsnap verify | grep -q "1 新增" && ok "wsnap 检出新增" || no "wsnap 检出新增"
+run_wsnap verify | grep -q "1 added" && ok "wsnap detects addition" || no "wsnap detects addition"
 mkdir -p "$WS/data"; echo '{}' > "$WS/data/x.json"
-run_wsnap verify >/dev/null 2>&1; [ $? -eq 3 ] && ok "wsnap 可疑路径返回 3" || no "wsnap 可疑路径返回 3"
+run_wsnap verify >/dev/null 2>&1; [ $? -eq 3 ] && ok "wsnap returns 3 on suspicious path" || no "wsnap returns 3 on suspicious path"
 run_wsnap verify --accept >/dev/null 2>&1
-run_wsnap verify >/dev/null 2>&1; [ $? -eq 0 ] && ok "wsnap --accept 生效" || no "wsnap --accept 生效"
+run_wsnap verify >/dev/null 2>&1; [ $? -eq 0 ] && ok "wsnap --accept works" || no "wsnap --accept works"
 
-echo "== 通知层 =="
+echo "== Notification layer =="
 new_repo n1
 mkdir -p data; echo '{}' > data/c.json
 git add -f data >/dev/null 2>&1
 GUARD_NOTIFY=1 git commit -qm x >/dev/null 2>&1
-[ -s "$GUARD_DIR/last-block.txt" ] && ok "拦截时写报告文件" || no "拦截时写报告文件"
+[ -s "$GUARD_DIR/last-block.txt" ] && ok "report written on block" || no "report written on block"
 grep -q "^REPO=" "$GUARD_DIR/last-block.txt" 2>/dev/null \
   && grep -q "data/c.json" "$GUARD_DIR/last-block.txt" 2>/dev/null \
-  && ok "报告含仓库与命中文件" || no "报告含仓库与命中文件"
-# 通知关闭时不应写报告（GUARD_NOTIFY=0 走的是"未启用"分支，报告仍在 g_notify 内）
+  && ok "report contains repo and hit files" || no "report contains repo and hit files"
+# No report when notifications are off (GUARD_NOTIFY=0 takes the disabled branch; report still lives in g_notify)
 rm -f "$GUARD_DIR/last-block.txt"
 GUARD_NOTIFY=0 git commit -qm y >/dev/null 2>&1
-[ ! -s "$GUARD_DIR/last-block.txt" ] && ok "GUARD_NOTIFY=0 不写报告" || no "GUARD_NOTIFY=0 不写报告"
+[ ! -s "$GUARD_DIR/last-block.txt" ] && ok "GUARD_NOTIFY=0 writes no report" || no "GUARD_NOTIFY=0 writes no report"
 touch "$GUARD_DIR/notify.off"
 GUARD_NOTIFY=1 git commit -qm z >/dev/null 2>&1
-[ ! -s "$GUARD_DIR/last-block.txt" ] && ok "notify.off 关闭通知" || no "notify.off 关闭通知"
+[ ! -s "$GUARD_DIR/last-block.txt" ] && ok "notify.off disables notifications" || no "notify.off disables notifications"
 rm -f "$GUARD_DIR/notify.off"; reset_repo n1
 
-echo "== 通知按钮：本次允许 =="
+echo "== Notification button: Allow once =="
 new_repo a1
 mkdir -p data; echo '{}' > data/c.json
 git add -f data >/dev/null 2>&1
 git commit -qm x >/dev/null 2>&1
-[ $? -ne 0 ] && ok "放行前被拦" || no "放行前被拦"
-printf 'REPO=%s\nKIND=提交\nEXPIRE=%s\n' "$PWD" "$(( $(date +%s) + 600 ))" > "$GUARD_DIR/override-one-shot"
+[ $? -ne 0 ] && ok "blocked before bypass" || no "blocked before bypass"
+printf 'REPO=%s\nKIND=commit\nEXPIRE=%s\n' "$PWD" "$(( $(date +%s) + 600 ))" > "$GUARD_DIR/override-one-shot"
 git commit -qm x >/dev/null 2>&1
-[ $? -eq 0 ] && ok "令牌放行一次" || no "令牌放行一次"
-[ ! -e "$GUARD_DIR/override-one-shot" ] && ok "令牌用后即焚" || no "令牌用后即焚"
+[ $? -eq 0 ] && ok "token allows once" || no "token allows once"
+[ ! -e "$GUARD_DIR/override-one-shot" ] && ok "token consumed after use" || no "token consumed after use"
 mkdir -p data; echo y > data/y.json; git add -f data >/dev/null 2>&1
 git commit -qm x >/dev/null 2>&1
-[ $? -ne 0 ] && ok "令牌用完再拦" || no "令牌用完再拦"
+[ $? -ne 0 ] && ok "blocks again after token is spent" || no "blocks again after token is spent"
 reset_repo a1
 new_repo a2
 mkdir -p data; echo '{}' > data/c.json; git add -f data >/dev/null 2>&1
-printf 'REPO=%s\nKIND=提交\nEXPIRE=%s\n' "$PWD" "$(( $(date +%s) - 10 ))" > "$GUARD_DIR/override-one-shot"
+printf 'REPO=%s\nKIND=commit\nEXPIRE=%s\n' "$PWD" "$(( $(date +%s) - 10 ))" > "$GUARD_DIR/override-one-shot"
 git commit -qm x >/dev/null 2>&1
-[ $? -ne 0 ] && ok "过期令牌不放行" || no "过期令牌不放行"
-[ ! -e "$GUARD_DIR/override-one-shot" ] && ok "过期令牌也被消费" || no "过期令牌也被消费"
+[ $? -ne 0 ] && ok "expired token does not allow" || no "expired token does not allow"
+[ ! -e "$GUARD_DIR/override-one-shot" ] && ok "expired token also consumed" || no "expired token also consumed"
 reset_repo a2
 
-echo "== 通知撤销 =="
+echo "== Notification dismissal =="
 new_repo d1
 mkdir -p data; echo '{}' > data/c.json
 git add -f data >/dev/null 2>&1
 GUARD_NOTIFY=1 git commit -qm x >/dev/null 2>&1
-[ -s "$GUARD_DIR/last-block.txt" ] && ok "拦截后存在报告" || no "拦截后存在报告"
+[ -s "$GUARD_DIR/last-block.txt" ] && ok "report exists after block" || no "report exists after block"
 reset_repo d1
 GUARD_NOTIFY=1 git commit -qm ok >/dev/null 2>&1
-[ ! -e "$GUARD_DIR/last-block.txt" ] && ok "放行后清掉过期报告" || no "放行后清掉过期报告"
+[ ! -e "$GUARD_DIR/last-block.txt" ] && ok "stale report cleared after pass" || no "stale report cleared after pass"
 reset_repo d1
 
 echo
-echo "通过 $pass / 失败 $fail"
+echo "passed $pass / failed $fail"
 [ "$fail" -eq 0 ]

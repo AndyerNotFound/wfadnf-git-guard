@@ -1,5 +1,5 @@
-# 高置信度特征：大小写敏感、任何目录都查（含二进制文件前 1MB）。
-# 换行即一条 ERE。
+# High-confidence patterns: case-sensitive, scanned in any directory (incl. first 1MB of binaries).
+# One ERE per line.
 -----BEGIN [A-Z ]*PRIVATE KEY-----
 (sk|rk)-[A-Za-z0-9_-]{20,}
 gh[pousr]_[A-Za-z0-9]{20,}

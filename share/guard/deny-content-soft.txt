@@ -1,4 +1,4 @@
-# 宽松特征：可能是示例/文档，lang|test|docs 目录里不检查。
+# Soft patterns: may be samples/docs; skipped in lang|test|docs directories.
 (api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|passwd|secret|token)["']?[[:space:]]*[:=][[:space:]]*["'][A-Za-z0-9_./+=-]{12,}["']
-# 配置里的 "key": "<看起来像密钥、含数字、无点号>"
+# In configs: "key": "<looks like a secret, contains digits, no dots>"
 "key"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_/+=-]*[0-9][A-Za-z0-9_/+=-]{15,}"

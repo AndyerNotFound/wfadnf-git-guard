@@ -1,13 +1,13 @@
-# 每行一个 ERE，匹配"仓库内相对路径"（内部自动加前导 /，所以 ^/ 表示仓库根）。
-# ---- 运行时数据目录：任意层级（源码里的 xxx/data 包名走 allow-paths 放行）----
+# One ERE per line, matching "repo-relative paths" (a leading / is added internally, so ^/ means the repo root).
+# ---- Runtime data dirs: any level (source data package names go through allow-paths) ----
 (^|/)(runtime|backups?|logs?|sessions?|\.run)/
 (^|/)data/
 (^|/)storage/
 (^|/)node_modules/
-# ---- 运行时配置文件（只在仓库根；嵌套的 config.default.json 属于模板）----
+# ---- Runtime config files (repo root only; nested config.default.json is a template) ----
 ^/config\.[A-Za-z0-9._-]+\.json$
 ^/config\.json$
-# ---- 密钥/凭据 ----
+# ---- Secrets / credentials ----
 (^|/)\.env(\..*)?$
 (^|/)\.netrc$
 (^|/)\.npmrc$
@@ -16,9 +16,9 @@
 (^|/)id_(rsa|dsa|ecdsa|ed25519)$
 \.keyrotation\.json$
 \.(pem|p12|pfx|jks|keystore|kdbx|srl|key)$
-# ---- 数据库/状态 ----
+# ---- Databases / state ----
 \.(db|sqlite|sqlite3|realm|mdb)$
-# ---- 日志/临时/归档 ----
+# ---- Logs / temp / archives ----
 \.(pid|sock|log)$
 \.deleted\..*$
 \.(tgz|tar\.gz|zip|7z|rar|bundle)$

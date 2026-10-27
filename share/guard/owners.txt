@@ -1,4 +1,4 @@
-# 自己的远端前缀（每行一个）。命中则视为"自己的仓库"，会装钩子。
-# 例：
+# Your own remote prefixes (one per line). A match marks the repo as "ours" and it gets hooked.
+# Example:
 # github.com/yourusername/
 # gitlab.com/yourusername/

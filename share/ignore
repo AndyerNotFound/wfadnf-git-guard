@@ -1,4 +1,4 @@
-# git 全局兜底忽略（不影响仓库内 .gitignore）
+# Global git ignore fallback (does not affect in-repo .gitignore)
 .env
 .env.*
 *.pem

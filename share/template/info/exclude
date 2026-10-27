@@ -1,4 +1,4 @@
-# >>> git-guard: 运行时数据/密钥 —— 索引级默认拒绝（git add -f 可强推，但需要人刻意为之）>>>
+# >>> git-guard: runtime data/secrets -- index-level deny by default (git add -f can force it in, but that takes deliberate action) >>>
 /data/
 /runtime/
 /backups/

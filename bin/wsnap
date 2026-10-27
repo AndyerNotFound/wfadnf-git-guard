@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# wsnap — 工作区基线核验
-#   wsnap init            建立/重建基线（全量哈希一次）
-#   wsnap verify          增量核验：新增/修改/删除 + 私有数据副本 + 规则命中
-#   wsnap verify --accept 核验并把当前状态接受为新基线
-#   wsnap hook on|off     在 ~/.bashrc 装/卸"提示符自动核验"
-#   wsnap watch [秒]      轮询模式（默认 5s），只在出现告警时打印
+# wsnap -- worktree baseline verification
+#   wsnap init            build/rebuild the baseline (full hash pass)
+#   wsnap verify          incremental check: added/modified/deleted + private data copies + rule hits
+#   wsnap verify --accept verify and accept the current state as the new baseline
+#   wsnap hook on|off     install/remove prompt-time auto verification in ~/.bashrc
+#   wsnap watch [secs]    polling mode (default 5s); prints only when there are warnings
 set -u
 GUARD_DIR="${GUARD_DIR:-$HOME/.config/git/guard}"
 GROOT="${GUARD_ROOT:-$HOME/.config/git}"
 . "$GROOT/guard-lib.sh"
 ROOT="${WSN_ROOT:-$HOME/work}"
 STATE="${WSN_STATE:-$GUARD_DIR/wsnap}"
-# TMPDIR 兜底（cron/CI 里常未设置；Android 上 /tmp 通常不可写）
+# TMPDIR fallback (often unset in cron/CI; /tmp is usually not writable on Android)
 if [ ! -d "${TMPDIR:-/nonexistent}" ] || [ ! -w "${TMPDIR:-/nonexistent}" ]; then
   for _c in /tmp "$HOME/.cache" "$HOME/.tmp" "${PREFIX:-}/tmp"; do
     [ -d "$_c" ] && [ -w "$_c" ] && { TMPDIR="$_c"; break; }
   done
 fi
-[ -d "${TMPDIR:-/nonexistent}" ] && [ -w "${TMPDIR:-/nonexistent}" ] || { echo "wsnap: 找不到可写的临时目录" >&2; exit 2; }
+[ -d "${TMPDIR:-/nonexistent}" ] && [ -w "${TMPDIR:-/nonexistent}" ] || { echo "wsnap: no writable temp directory found" >&2; exit 2; }
 export TMPDIR
 WT=""
 wtmp_init() { [ -n "$WT" ] || { WT=$(mktemp -d "$TMPDIR/wsnap.XXXXXX" 2>/dev/null) || WT="$TMPDIR"; }; }
@@ -33,14 +33,14 @@ walk() { find . \( "${PRUNE[@]}" \) -prune -o -type f -printf '%P\t%s\t%T@\n' 2>
 cmd_init() {
   trap 'wtmpclean' EXIT
   wtmp_init
-  mkdir -p "$STATE" || die "无法创建 $STATE"
-  cd "$ROOT" 2>/dev/null || die "工作区不存在: $ROOT"
-  walk > "$WT/ws.cur" || die "遍历失败"
+  mkdir -p "$STATE" || die "cannot create $STATE"
+  cd "$ROOT" 2>/dev/null || die "worktree does not exist: $ROOT"
+  walk > "$WT/ws.cur" || die "walk failed"
   cut -f1 "$WT/ws.cur" > "$WT/ws.paths"
-  git hash-object --stdin-paths < "$WT/ws.paths" > "$WT/ws.h" 2>/dev/null || die "哈希失败"
+  git hash-object --stdin-paths < "$WT/ws.paths" > "$WT/ws.h" 2>/dev/null || die "hashing failed"
   paste <(cut -f1 "$WT/ws.cur") <(cut -f2,3 "$WT/ws.cur") "$WT/ws.h" > "$BASE"
   rm -f "$WT/ws.cur" "$WT/ws.paths" "$WT/ws.h"
-  echo "基线已建立: ${BASE/#$HOME/~}  ($(wc -l < "$BASE") 个文件)"
+  echo "Baseline created: ${BASE/#$HOME/~}  ($(wc -l < "$BASE") file(s))"
 }
 
 cmd_verify() {
@@ -48,11 +48,11 @@ cmd_verify() {
   wtmp_init
   local accept=0 prompt=0
   for a in "$@"; do case "$a" in --accept) accept=1;; --prompt) prompt=1;; esac; done
-  [ -s "$BASE" ] || { echo "还没有基线，先跑: wsnap init" >&2; exit 2; }
-  cd "$ROOT" 2>/dev/null || die "工作区不存在: $ROOT"
+  [ -s "$BASE" ] || { echo "No baseline yet; run wsnap init first" >&2; exit 2; }
+  cd "$ROOT" 2>/dev/null || die "worktree does not exist: $ROOT"
   local t0=$(date +%s%N)
 
-  walk > "$WT/ws.cur" || die "遍历失败"
+  walk > "$WT/ws.cur" || die "walk failed"
   awk -F'\t' '
     NR==FNR { os[$1]=$2; om[$1]=$3; oh[$1]=$4; next }
     { cn[$1]=1
@@ -78,29 +78,29 @@ cmd_verify() {
   while IFS=$'\t' read -r p id; do
     [ -z "${p:-}" ] && continue
     bhash=$(awk -F'\t' -v p="$p" '$1==p{print $4; exit}' "$BASE")
-    if [ -n "$bhash" ] && [ -n "$id" ] && [ "$bhash" = "$id" ]; then info+=("·  仅时间戳变化  $p"); continue; fi
+    if [ -n "$bhash" ] && [ -n "$id" ] && [ "$bhash" = "$id" ]; then info+=("·  timestamp-only change  $p"); continue; fi
     m=""
     if [ -s "$PRIV" ] && [ -n "$id" ] && grep -qF "$id"$'\t' "$PRIV"; then
       origin=$(grep -m1 -F "$id"$'\t' "$PRIV" | cut -f2)
-      bad+=("⛔ 私有数据副本  $p  ≡  ${origin/#$HOME/~}")
+      bad+=("⛔ private data copy  $p  ≡  ${origin/#$HOME/~}")
       continue
     fi
     __g_blocked=0; __g_files=(); __g_reasons=()
     g_check_path "$p"
     if [ "$__g_blocked" -eq 1 ]; then
-      warn+=("⚠  路径可疑      $p  (${__g_reasons[0]})"); continue
+      warn+=("⚠  suspicious path    $p  (${__g_reasons[0]})"); continue
     fi
     if [ -f "$p" ] && [ -f "$GUARD_DIR/deny-content.txt" ] && [ "$(stat -c %s "$p" 2>/dev/null || echo 0)" -lt 1048576 ]; then
       g_pats "$GUARD_DIR/deny-content.txt" > "$WT/ws.ps"
       if [ -s "$WT/ws.ps" ] && head -c 1048576 "$p" 2>/dev/null | grep -vaEi -- "$G_MOCK_RE" | grep -qaE -f "$WT/ws.ps"; then
-        bad+=("⛔ 密钥特征      $p"); continue
+        bad+=("⛔ secret pattern    $p"); continue
       fi
     fi
     info+=("·  $p")
   done < "$WT/ws.hp"
 
   while IFS=$'\t' read -r t p; do
-    [ "$t" = "D" ] && dl+=("·  已删除  $p")
+    [ "$t" = "D" ] && dl+=("·  deleted  $p")
   done < "$WT/ws.diff"
 
   local t1; t1=$(date +%s%N); local ms=$(( (t1 - t0) / 1000000 ))
@@ -112,14 +112,14 @@ cmd_verify() {
     return 0
   fi
 
-  echo "wsnap: ${nN} 新增 / ${nM} 修改 / ${nD} 删除  (${ms}ms)  [${ROOT/#$HOME/~}]"
+  echo "wsnap: ${nN} added / ${nM} modified / ${nD} deleted  (${ms}ms)  [${ROOT/#$HOME/~}]"
   for x in "${bad[@]:-}"; do [ -n "$x" ] && echo "  $x"; done
   for x in "${warn[@]:-}"; do [ -n "$x" ] && echo "  $x"; done
   local i=0
-  for x in "${info[@]:-}"; do [ -n "$x" ] && { echo "  $x"; i=$((i+1)); [ $i -ge 12 ] && { echo "  … 其余 $(( ${#info[@]} - 12 )) 项省略"; break; }; }; done
+  for x in "${info[@]:-}"; do [ -n "$x" ] && { echo "  $x"; i=$((i+1)); [ $i -ge 12 ] && { echo "  … $(( ${#info[@]} - 12 )) more omitted"; break; }; }; done
   for x in "${dl[@]:-}"; do [ -n "$x" ] && echo "  $x"; done
 
-  if [ $accept -eq 1 ]; then cmd_accept; echo "  已接受为新的基线"; fi
+  if [ $accept -eq 1 ]; then cmd_accept; echo "  accepted as the new baseline"; fi
   if [ "${#bad[@]}" -gt 0 ] || [ "${#warn[@]}" -gt 0 ]; then return 3; fi
   return 0
 }
@@ -161,19 +161,19 @@ cmd_hook() {
   local rc="$HOME/.bashrc" mark="# >>> wsnap prompt hook" self
   case "${1:-on}" in
     on)
-      grep -qF "$mark" "$rc" 2>/dev/null && { echo "已经装过了"; return 0; }
+      grep -qF "$mark" "$rc" 2>/dev/null && { echo "already installed"; return 0; }
       self=$(readlink -f "$0")
       {
         echo "$mark"
         printf 'case "$PROMPT_COMMAND" in *wsnap*) ;; *) PROMPT_COMMAND="%s prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}";; esac\n' "$self"
         echo "# <<< wsnap prompt hook"
       } >> "$rc"
-      echo "已装入 ~/.bashrc（新开终端生效）。卸装: wsnap hook off";;
+      echo "Installed into ~/.bashrc (takes effect in new terminals). Uninstall: wsnap hook off";;
     off)
-      grep -qF "$mark" "$rc" 2>/dev/null || { echo "未安装"; return 0; }
+      grep -qF "$mark" "$rc" 2>/dev/null || { echo "not installed"; return 0; }
       awk '/^# >>> wsnap prompt hook$/{s=1} !s{print} /^# <<< wsnap prompt hook$/{s=0}' "$rc" > "$rc.wsnap" && mv "$rc.wsnap" "$rc"
-      echo "已卸装";;
-    *) die "用法: wsnap hook on|off";;
+      echo "Uninstalled";;
+    *) die "Usage: wsnap hook on|off";;
   esac
 }
 
@@ -183,5 +183,5 @@ case "${1:-verify}" in
   watch)  shift; cmd_watch "$@";;
   hook)   shift; cmd_hook "$@";;
   prompt) cmd_prompt;;
-  *) echo "用法: wsnap {init|verify [--accept]|watch [秒]|hook on|off|prompt}"; exit 2;;
+  *) echo "Usage: wsnap {init|verify [--accept]|watch [secs]|hook on|off|prompt}"; exit 2;;
 esac
