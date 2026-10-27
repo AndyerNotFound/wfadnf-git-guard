@@ -9,6 +9,7 @@ set -u
 GUARD_ROOT="${GUARD_ROOT:-$HOME/.config/git}"
 GUARD_DIR="${GUARD_DIR:-$GUARD_ROOT/guard}"
 BIN_DIR="${GUARD_BIN_DIR:-$HOME/bin}"
+TEMPLATE_HOOKS="$GUARD_ROOT/template/hooks"
 . "$GUARD_ROOT/guard-lib.sh" || { echo "git-guard: 找不到 $GUARD_ROOT/guard-lib.sh" >&2; exit 1; }
 
 # 扫描排除的目录（正则），可用 $GUARD_DIR/exclude-dirs.txt 覆盖

@@ -1,16 +1,16 @@
 <p align="center">
   <img src="assets/readme/hero.svg" width="100%"
-       alt="wfadnf-git-guard：提交前按路径、体积、内容、指纹四层检查，拦截运行时数据与密钥">
+       alt="wfadnf-git-guard: blocks runtime data and secrets before commit, by path, size, content, and fingerprint">
 </p>
 
 <p align="center">
-  用户级 <code>pre-commit</code> / <code>pre-push</code> 防泄漏闸。<br>
-  <b>路径 · 体积 · 内容 · 指纹</b> 四层检查，在 git 写入之前完成拦截。
+  A user-level <code>pre-commit</code> / <code>pre-push</code> leak guard.<br>
+  Four layers — <b>path · size · content · fingerprint</b> — checked before git writes anything.
 </p>
 
-<p align="center"><a href="README.en.md">English</a></p>
+<p align="center"><a href="README.md">中文</a></p>
 
-## 拦截输出示例
+## Example output of a blocked commit
 
 ```text
 $ git commit -m "sync runtime"
@@ -32,72 +32,72 @@ $ git commit -m "sync runtime"
 =========================================================
 ```
 
-`.gitignore` 仅按路径匹配、仅在单个仓库内生效，且无法阻止 `git add -f`。git-guard 将规则置于用户级并按内容检查：运行时文件预先计算指纹，任何仓库中出现逐字节相同的副本均会被拦截，即使重命名或更改扩展名亦然。
+`.gitignore` matches paths only, applies per repository, and cannot prevent `git add -f`. git-guard keeps its rules at user level and inspects content: runtime files are fingerprinted in advance, so a byte-identical copy in any repository is blocked, regardless of renaming or extension changes.
 
-## 安装
+## Installation
 
-依赖 `bash`、`git` 及 GNU `find`/`awk`/`sed`/`grep`；macOS 需执行 `brew install coreutils findutils gnu-sed`，并将 `gnubin` 加入 PATH。
+Requires `bash`, `git`, and GNU `find`/`awk`/`sed`/`grep`. On macOS, run `brew install coreutils findutils gnu-sed` and add `gnubin` to PATH.
 
 ```bash
 git clone https://github.com/AndyerNotFound/wfadnf-git-guard.git
 cd wfadnf-git-guard && ./install.sh
 ```
 
-钩子模板写入 `~/.config/git/template`，此后克隆的仓库自动继承；已有仓库可通过 `git-guard install` 补装。卸载方式：`./uninstall.sh`。
+Hook templates are installed into `~/.config/git/template`, so repositories cloned afterwards inherit the hooks automatically; existing repositories can be hooked with `git-guard install`. To uninstall, run `./uninstall.sh`.
 
-补充以下两项个人配置后完成初始化：
+Add the following two personal settings, then initialize:
 
 ```bash
-echo 'github.com/yourname/' >> ~/.config/git/guard/owners.txt         # 自有远端
-echo "$HOME/app-runtime"   >> ~/.config/git/guard/protected-roots.txt # 运行时目录
+echo 'github.com/yourname/' >> ~/.config/git/guard/owners.txt         # your remotes only
+echo "$HOME/app-runtime"   >> ~/.config/git/guard/protected-roots.txt # runtime data directory
 git-guard snapshot && wsnap init && wsnap hook on
 ```
 
-## 用法
+## Usage
 
-| 命令 | 功能 |
+| Command | Purpose |
 |---|---|
-| `git-guard status` | 显示配置、受保护目录与已挂钩仓库 |
-| `git-guard audit <目录>` | 审计已入库内容（仅列出文件名） |
-| `git-guard snapshot` | 重新计算运行时指纹 |
-| `git-guard check <文件>` | 预检：判断该文件是否会被拦截 |
-| `wsnap verify` | 报告工作区相对基线的变更（存在告警时返回码为 3） |
-| `wsnap verify --accept` | 接受当前状态为新基线 |
-| `wsnap watch 5` | 常驻轮询 |
-| `wsnap hook off` | 卸载提示符钩子 |
+| `git-guard status` | Show configuration, protected directories, and hooked repositories |
+| `git-guard audit <dir>` | Audit committed content (file names only) |
+| `git-guard snapshot` | Rebuild runtime fingerprints |
+| `git-guard check <file>` | Dry run: determine whether a file would be blocked |
+| `wsnap verify` | Report workspace changes against the baseline (exit code 3 on alert) |
+| `wsnap verify --accept` | Accept the current state as the new baseline |
+| `wsnap watch 5` | Resident polling |
+| `wsnap hook off` | Remove the prompt hook |
 
-若已安装 `termux-api` 或 `notify-send`，拦截发生时将推送通知，可一键取消暂存，或签发一次性放行令牌（默认有效期 10 分钟，仅对下一次提交有效，`pre-push` 不予认可；有效期可经 `allow-ttl` 调整）。`GUARD_NOTIFY=0` 使本次操作不发送通知，`GUARD_OVERRIDE=1` 放行本次操作，误报可写入 `allow-paths.txt` 获得永久放行。
+If `termux-api` or `notify-send` is installed, a notification is pushed whenever a commit is blocked, allowing one-tap unstaging or the issuance of a one-time allow token (valid for 10 minutes by default, consumed by the next commit attempt only, and not honored by `pre-push`; the TTL is tunable via `allow-ttl`). `GUARD_NOTIFY=0` suppresses the notification for a single operation, `GUARD_OVERRIDE=1` overrides the check once, and false positives can be whitelisted permanently in `allow-paths.txt`.
 
-## 规则
+## Rules
 
-`~/.config/git/guard/` 下均为纯文本文件，每行一条 ERE，修改后立即生效。
+All files under `~/.config/git/guard/` are plain text, one ERE per line, and take effect immediately after editing.
 
-| 文件 | 用途 |
+| File | Purpose |
 |---|---|
-| `deny-paths.txt` | 路径规则：`data/`、`.env`、`*.pem`、日志、压缩包等 |
-| `deny-content.txt` | 高置信度特征：私钥头、`sk-`、`ghp_`、`AKIA`、JWT |
-| `deny-content-soft.txt` | 密钥赋值 `key = "…"`；跳过 `lang`/`test`/`docs` |
-| `allow-paths.txt` | 永久放行 |
-| `protected-roots.txt` | 禁止目录内仓库提交与推送 |
-| `owners.txt` | 自有远端前缀 |
-| `exclude-dirs.txt` | 扫描时跳过的目录 |
-| `private.blobs` | 指纹清单（由 `snapshot` 生成） |
-| `allowed-repos.txt` | 受保护目录内的例外仓库 |
+| `deny-paths.txt` | Path rules: `data/`, `.env`, `*.pem`, logs, archives, etc. |
+| `deny-content.txt` | High-confidence patterns: private key headers, `sk-`, `ghp_`, `AKIA`, JWT |
+| `deny-content-soft.txt` | Key assignments `key = "…"`; skips `lang`/`test`/`docs` |
+| `allow-paths.txt` | Permanent whitelist |
+| `protected-roots.txt` | Repositories inside these directories cannot commit or push |
+| `owners.txt` | Prefixes of your own remotes |
+| `exclude-dirs.txt` | Directories skipped during scanning |
+| `private.blobs` | Fingerprint list (generated by `snapshot`) |
+| `allowed-repos.txt` | Exceptions inside protected directories |
 
-体积上限为 5 MB；内容检查仅读取前 1 MB，并跳过 `mock`/`example` 等占位值；指纹仅匹配逐字节相同的文件。
+The size limit is 5 MB; content checks read only the first 1 MB and skip placeholders such as `mock`/`example`; fingerprints match byte-identical files only.
 
-## 限制
+## Limitations
 
-- 并非沙箱：钩子可被同一用户删除或修改，`--no-verify` 亦可跳过；最终防线依赖服务端 push protection 或 `pre-receive`。
-- 指纹无法识别经编码、压缩或加密处理后的变体。
-- 新克隆的仓库（含第三方仓库）将继承模板钩子；如不希望继承，可调整 `init.templateDir`。
-- 未使用 inotify；新建文件将于下一次 `wsnap verify` 时纳入基线。
-- `audit` 仅列出文件名；清理历史记录需使用 `git filter-repo` 或 BFG。
+- Not a sandbox: hooks can be removed or modified by the same user, and `--no-verify` bypasses them; the ultimate safeguard is server-side push protection or `pre-receive`.
+- Fingerprints do not recognize variants produced by encoding, compression, or encryption.
+- Newly cloned repositories (including third-party ones) inherit the template hooks; adjust `init.templateDir` if this is undesired.
+- No inotify; newly created files are incorporated at the next `wsnap verify`.
+- `audit` lists file names only; rewriting history requires `git filter-repo` or BFG.
 
-## 自测
+## Tests
 
 ```bash
-bash test/run-tests.sh   # 32 个用例，全部在临时目录中执行
+bash test/run-tests.sh   # 32 cases, all executed in temporary directories
 ```
 
 ## License

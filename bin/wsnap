@@ -7,7 +7,8 @@
 #   wsnap watch [秒]      轮询模式（默认 5s），只在出现告警时打印
 set -u
 GUARD_DIR="${GUARD_DIR:-$HOME/.config/git/guard}"
-. "$HOME/.config/git/guard-lib.sh"
+GROOT="${GUARD_ROOT:-$HOME/.config/git}"
+. "$GROOT/guard-lib.sh"
 ROOT="${WSN_ROOT:-$HOME/work}"
 STATE="${WSN_STATE:-$GUARD_DIR/wsnap}"
 # TMPDIR 兜底（cron/CI 里常未设置；Android 上 /tmp 通常不可写）
