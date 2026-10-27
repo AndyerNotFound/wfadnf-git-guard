@@ -1,0 +1,24 @@
+# 每行一个 ERE，匹配"仓库内相对路径"（内部自动加前导 /，所以 ^/ 表示仓库根）。
+# ---- 运行时数据目录：任意层级（源码里的 xxx/data 包名走 allow-paths 放行）----
+(^|/)(runtime|backups?|logs?|sessions?|\.run)/
+(^|/)data/
+(^|/)storage/
+(^|/)node_modules/
+# ---- 运行时配置文件（只在仓库根；嵌套的 config.default.json 属于模板）----
+^/config\.[A-Za-z0-9._-]+\.json$
+^/config\.json$
+# ---- 密钥/凭据 ----
+(^|/)\.env(\..*)?$
+(^|/)\.netrc$
+(^|/)\.npmrc$
+(^|/)\.pypirc$
+(^|/)\.git-credentials$
+(^|/)id_(rsa|dsa|ecdsa|ed25519)$
+\.keyrotation\.json$
+\.(pem|p12|pfx|jks|keystore|kdbx|srl|key)$
+# ---- 数据库/状态 ----
+\.(db|sqlite|sqlite3|realm|mdb)$
+# ---- 日志/临时/归档 ----
+\.(pid|sock|log)$
+\.deleted\..*$
+\.(tgz|tar\.gz|zip|7z|rar|bundle)$

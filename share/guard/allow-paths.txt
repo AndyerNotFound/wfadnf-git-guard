@@ -1,0 +1,7 @@
+# 命中这里的文件不做路径/内容检查。必须写 ERE 且以 ^/ 开头（匹配 "/相对路径"）。
+# 源码里的 data 包名（Kotlin/Java/Go），不是运行时数据
+^/app/src/.*/data/
+^/src/main/.*/data/
+^/src/.*/data/
+^/app/src/.*/runtime/
+^/src/.*/runtime/

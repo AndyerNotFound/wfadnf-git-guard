@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# git-guard: 提交前拦截运行时数据/密钥
+GROOT="${GUARD_ROOT:-$HOME/.config/git}"
+. "$GROOT/guard-lib.sh" || { echo "git-guard: 找不到 $GROOT/guard-lib.sh" >&2; exit 1; }
+guard_pre_commit

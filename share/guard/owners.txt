@@ -1,0 +1,4 @@
+# 自己的远端前缀（每行一个）。命中则视为"自己的仓库"，会装钩子。
+# 例：
+# github.com/yourusername/
+# gitlab.com/yourusername/

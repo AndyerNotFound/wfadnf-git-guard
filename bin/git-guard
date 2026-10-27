@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# git-guard —— 安装 / 检查 / 审计 git 防泄漏钩子
+#   git-guard install [目录...]   给已有仓库装钩子（缺省扫描 $GUARD_SCAN_ROOTS 或 ~）
+#   git-guard status              查看全局配置、规则、已挂钩子的仓库
+#   git-guard audit  [目录...]    审计已入库内容（只列文件名，不打印内容）
+#   git-guard snapshot            重算运行时文件指纹清单
+set -u
+GUARD_ROOT="${GUARD_ROOT:-$HOME/.config/git}"
+GUARD_DIR="${GUARD_DIR:-$GUARD_ROOT/guard}"
+BIN_DIR="${GUARD_BIN_DIR:-$HOME/bin}"
+. "$GUARD_ROOT/guard-lib.sh" || { echo "git-guard: 找不到 $GUARD_ROOT/guard-lib.sh" >&2; exit 1; }
+
+# 扫描排除的目录（正则），可用 $GUARD_DIR/exclude-dirs.txt 覆盖
+exclude_re() {
+  if [ -f "$GUARD_DIR/exclude-dirs.txt" ]; then g_pats "$GUARD_DIR/exclude-dirs.txt" | paste -sd'|' -;
+  else echo 'node_modules|\.gradle|\.cache|\.cargo|\.npm|\.bun|\.venv|\.tox|dist|build'; fi
+}
+
+find_repos() {
+  local roots=("$@") r
+  [ ${#roots[@]} -eq 0 ] && roots=(${GUARD_SCAN_ROOTS:-$HOME})
+  for r in "${roots[@]}"; do
+    [ -d "$r" ] || continue
+    find "$r" -maxdepth 5 -name .git -prune -print 2>/dev/null
+  done | sed 's|/\.git$||' | grep -vE "/($(exclude_re))(/)?" | sort -u
+}
+
+# 只给"自己的"仓库挂钩子：无远端 / 远端在 owners.txt 里 / 自建远端
+repo_is_ours() {
+  local d="$1" url sp p
+  sp=$(git -C "$d" rev-parse --show-superproject-working-tree 2>/dev/null) || sp=""
+  [ -n "$sp" ] && return 1
+  url=$(git -C "$d" config --get remote.origin.url 2>/dev/null) || url=""
+  [ -z "$url" ] && return 0
+  if [ -f "$GUARD_DIR/owners.txt" ]; then
+    while IFS= read -r p; do
+      case "$p" in ''|'#'*) continue;; esac
+      case "$url" in *"$p"*) return 0;; esac
+    done < "$GUARD_DIR/owners.txt"
+  fi
+  case "$url" in
+    *github.com/*|*gitlab.com/*|*bitbucket.org/*) return 1;;   # 第三方开源仓库不动
+    *) return 0;;                                             # 自建/私有远端视为自己的
+  esac
+}
+
+apply_exclude() {
+  local d="$1" ex="$1/.git/info/exclude"
+  mkdir -p "$d/.git/info" || return 0
+  touch "$ex"
+  sed -i '/^# >>> git-guard/,/^# <<< git-guard/d' "$ex" 2>/dev/null
+  cat "$GUARD_ROOT/template/info/exclude" >> "$ex"
+}
+
+cmd_install() {
+  local repos=() d h n=0
+  mapfile -t repos < <(find_repos "$@")
+  for d in "${repos[@]}"; do
+    [ -d "$d/.git" ] || continue
+    repo_is_ours "$d" || continue
+    for h in pre-commit pre-push; do
+      local dst="$d/.git/hooks/$h"
+      if [ -e "$dst" ] && [ ! -L "$dst" ]; then cp -p "$dst" "$dst.bak-$(date +%s)"; fi
+      ln -sfn "$TEMPLATE_HOOKS/$h" "$dst"
+    done
+    apply_exclude "$d"
+    n=$((n+1)); echo "  hooked+exclude: ${d/#$HOME/~}"
+  done
+  echo "已为 $n 个仓库安装 git-guard（钩子 + 索引级忽略）"
+  echo "开源仓库若被误跳过，把它的远端前缀写进 $GUARD_DIR/owners.txt"
+}
+
+cmd_status() {
+  echo "init.templateDir = $(git config --global --get init.templateDir)"
+  echo "core.excludesFile = $(git config --global --get core.excludesFile)"
+  echo "受保护目录:"; grep -v '^[[:space:]]*#' "$GUARD_DIR/protected-roots.txt" 2>/dev/null | sed 's/^/  /'
+  echo "已挂钩子的仓库:"
+  local d
+  while IFS= read -r d; do
+    [ -L "$d/.git/hooks/pre-commit" ] && echo "  ${d/#$HOME/~}"
+  done < <(find_repos)
+}
+
+cmd_audit() {
+  local repos=() d head i hits=0
+  mapfile -t repos < <(find_repos "$@")
+  echo "审计 ${#repos[@]} 个仓库…"
+  for d in "${repos[@]}"; do
+    [ -d "$d/.git" ] || continue
+    pushd "$d" >/dev/null 2>&1 || continue
+    head=$(git rev-parse HEAD 2>/dev/null) || { popd >/dev/null; continue; }
+    __g_blocked=0; __g_files=(); __g_reasons=()
+    g_scan_tree "$head"
+    if [ "$__g_blocked" -eq 1 ]; then
+      for i in "${!__g_files[@]}"; do
+        echo "  [${__g_reasons[$i]}] ${d/#$HOME/~}/${__g_files[$i]}"
+        hits=$((hits+1))
+      done
+    fi
+    popd >/dev/null
+  done
+  echo "完成。命中 $hits 项（只列文件名，不打印内容）。"
+  echo "清理: git rm --cached <file> && echo '<pattern>' >> .gitignore"
+  echo "已推送过的密钥请立即吊销，并用 git filter-repo / BFG 清理历史。"
+}
+
+cmd_snapshot() { g_fp_snapshot; }
+
+case "${1:-status}" in
+  snapshot) cmd_snapshot;;
+  install)  shift; cmd_install "$@";;
+  status)   cmd_status;;
+  audit)    shift; cmd_audit "$@";;
+  *) echo "用法: git-guard {install|status|audit|snapshot} [目录...]"; exit 2;;
+esac

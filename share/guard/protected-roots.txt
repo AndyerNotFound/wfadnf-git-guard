@@ -1,0 +1,5 @@
+# 位于这些目录内的仓库默认禁止提交/推送（运行时数据存放处）。每行一个绝对路径。
+# 例：
+# /home/you/.ssh
+# /home/you/.gnupg
+# /home/you/app-runtime

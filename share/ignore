@@ -1,0 +1,12 @@
+# git 全局兜底忽略（不影响仓库内 .gitignore）
+.env
+.env.*
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+.netrc
+.git-credentials
+id_rsa
+id_ed25519

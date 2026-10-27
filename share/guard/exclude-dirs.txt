@@ -1,0 +1,2 @@
+# find_repos 扫描时跳过的目录名（ERE，用 | 连接）
+node_modules|\.gradle|\.cache|\.cargo|\.npm|\.bun|\.venv|\.tox|dist|build|\.git

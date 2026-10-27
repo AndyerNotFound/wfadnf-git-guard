@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480"
+     role="img" aria-labelledby="title desc">
+  <title id="title">wfadnf-git-guard</title>
+  <desc id="desc">提交前按路径、体积、内容特征和运行时文件指纹四层检查；右侧是一次被拦下的 git commit 真实输出。</desc>
+
+  <rect width="1200" height="480" rx="26" fill="#0A0E11"/>
+
+  <g transform="translate(64 78)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif">
+    <text x="0" y="0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="17" letter-spacing="2.4" fill="#7D8590">GIT HOOKS · PRE-COMMIT / PRE-PUSH</text>
+
+    <text x="0" y="74" font-size="54" font-weight="700" fill="#E6EDF3">wfadnf-git-guard</text>
+
+    <text x="0" y="134" font-size="27" fill="#C9D1D9">运行时数据、密钥、配置文件</text>
+    <text x="0" y="172" font-size="27" fill="#C9D1D9">拦在提交和推送之前</text>
+
+    <g transform="translate(0 238)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">
+      <rect x="0" y="-24" width="90" height="38" rx="10" fill="#11171B" stroke="#26323A"/>
+      <text x="16" y="2" fill="#3FB950">01 路径</text>
+      <rect x="102" y="-24" width="90" height="38" rx="10" fill="#11171B" stroke="#26323A"/>
+      <text x="118" y="2" fill="#3FB950">02 体积</text>
+      <rect x="204" y="-24" width="90" height="38" rx="10" fill="#11171B" stroke="#26323A"/>
+      <text x="220" y="2" fill="#D29922">03 内容</text>
+      <rect x="306" y="-24" width="90" height="38" rx="10" fill="#11171B" stroke="#26323A"/>
+      <text x="322" y="2" fill="#F85149">04 指纹</text>
+    </g>
+
+    <text x="0" y="302" font-size="19" fill="#7D8590">同一套规则，查暂存区，也查即将推送的每个提交。</text>
+
+    <text x="0" y="390" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="17" fill="#7D8590">bash · git hooks · 无 root 依赖 · AGPL-3.0</text>
+  </g>
+
+  <g transform="translate(604 48)">
+    <rect width="532" height="384" rx="18" fill="#10161A" stroke="#22303A"/>
+
+    <circle cx="26" cy="24" r="6" fill="#F85149"/>
+    <circle cx="46" cy="24" r="6" fill="#D29922"/>
+    <circle cx="66" cy="24" r="6" fill="#3FB950"/>
+    <text x="92" y="31" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="17" fill="#7D8590">pre-commit</text>
+    <text x="506" y="31" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="17" font-weight="700" fill="#F85149">EXIT 1</text>
+    <path d="M0 52 H532" stroke="#22303A"/>
+
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+      <text x="28" y="96" font-size="21" fill="#8B949E">$ git commit -m "sync runtime"</text>
+
+      <text x="28" y="142" font-size="22" fill="#F85149">× data/config.json</text>
+      <text x="46" y="170" font-size="18" fill="#7D8590">路径规则 (^|/)data/</text>
+
+      <text x="28" y="212" font-size="22" fill="#F85149">× notes.txt</text>
+      <text x="46" y="240" font-size="18" fill="#7D8590">与运行时文件逐字节相同</text>
+
+      <text x="28" y="282" font-size="22" fill="#F85149">× key.js</text>
+      <text x="46" y="310" font-size="18" fill="#7D8590">内容命中 sk- 密钥特征</text>
+    </g>
+
+    <path d="M0 334 H532" stroke="#22303A"/>
+    <text x="28" y="370" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="18" fill="#8B949E">pre-push：对即将推送的提交再扫一遍</text>
+  </g>
+</svg>
