@@ -89,6 +89,16 @@ g_consume_one_shot() {
   return 0
 }
 
+# 检查通过后撤销之前的拦截通知（只在上次真的拦截过时才有开销）
+g_notify_dismiss() {
+  [ -f "$GUARD_DIR/last-block.txt" ] || return 0
+  rm -f "$GUARD_DIR/last-block.txt"
+  command -v termux-notification-remove >/dev/null 2>&1 && {
+    timeout 8 termux-notification-remove git-guard >/dev/null 2>&1 || :
+  }
+  return 0
+}
+
 g_write_report() {
   local kind="$1" f="$GUARD_DIR/last-block.txt" i top
   mkdir -p "$GUARD_DIR" 2>/dev/null || return 0
@@ -119,7 +129,10 @@ g_notify() {
   n=${#__g_files[@]}
   [ "$n" -eq 0 ] && return 0
   f=$(g_write_report "$kind")
-  title="$G_NOTIFY_TITLE_PREFIX 拦截${kind} · ${n} 个文件"
+  local top rb
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top="$PWD"
+  rb="${top##*/}"
+  title="$G_NOTIFY_TITLE_PREFIX 拦截${kind} · $rb · ${n} 个文件"
   body=""
   i=0
   while [ "$i" -lt "$n" ] && [ "$i" -lt 5 ]; do
@@ -401,7 +414,11 @@ guard_pre_commit() {
   g_check_repo_root "$top" || { g_report "提交"; exit 1; }
   g_scan_index
   g_check_fingerprints index
-  g_report "提交"
+  if g_report "提交"; then
+    g_notify_dismiss
+  else
+    return 1
+  fi
 }
 
 guard_pre_push() {
@@ -424,7 +441,11 @@ guard_pre_push() {
     g_scan_tree "$sha"
     g_check_fingerprints "$sha"
   done
-  g_report "推送"
+  if g_report "推送"; then
+    g_notify_dismiss
+  else
+    return 1
+  fi
 }
 
 # ============ 运行时私有文件指纹层 ============

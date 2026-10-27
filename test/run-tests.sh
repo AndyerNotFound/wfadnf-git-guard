@@ -159,6 +159,17 @@ git commit -qm x >/dev/null 2>&1
 [ ! -e "$GUARD_DIR/override-one-shot" ] && ok "过期令牌也被消费" || no "过期令牌也被消费"
 reset_repo a2
 
+echo "== 通知撤销 =="
+new_repo d1
+mkdir -p data; echo '{}' > data/c.json
+git add -f data >/dev/null 2>&1
+GUARD_NOTIFY=1 git commit -qm x >/dev/null 2>&1
+[ -s "$GUARD_DIR/last-block.txt" ] && ok "拦截后存在报告" || no "拦截后存在报告"
+reset_repo d1
+GUARD_NOTIFY=1 git commit -qm ok >/dev/null 2>&1
+[ ! -e "$GUARD_DIR/last-block.txt" ] && ok "放行后清掉过期报告" || no "放行后清掉过期报告"
+reset_repo d1
+
 echo
 echo "通过 $pass / 失败 $fail"
 [ "$fail" -eq 0 ]
